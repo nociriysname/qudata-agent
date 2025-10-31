@@ -1,0 +1,21 @@
+[Unit]
+Description=QuData Agent Service
+After=network.target docker.service auditd.service apparmor.service
+Requires=docker.service auditd.service apparmor.service
+
+[Service]
+ExecStart=/usr/local/bin/qudata-agent
+
+User=root
+Group=root
+WorkingDirectory=/opt/qudata-agent
+
+Restart=always
+RestartSec=5s
+# WatchdogSec=30 # Включим, когда реализуем нотификации в Go
+# Type=notify   # Аналогично
+
+Environment="QUDATA_API_KEY=YOUR_API_KEY_PLACEHOLDER"
+
+[Install]
+WantedBy=multi-user.target
