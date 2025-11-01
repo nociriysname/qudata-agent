@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 )
 
 const secretFilePath = "secret.json"
@@ -35,4 +36,13 @@ func LoadSecretKey() (string, error) {
 	}
 
 	return s.SecretKey, nil
+}
+
+func ShredSecretFile() error {
+	if _, err := os.Stat(secretFilePath); os.IsNotExist(err) {
+		return nil
+	}
+
+	cmd := exec.Command("shred", "-n", "1", "-z", "-u", secretFilePath)
+	return cmd.Run()
 }

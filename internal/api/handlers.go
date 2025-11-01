@@ -12,6 +12,10 @@ type Handlers struct {
 	orchestrator Orchestrator
 }
 
+type sshKeyRequest struct {
+	PublicKey string `json:"public_key"`
+}
+
 func NewHandlers(orch Orchestrator) *Handlers {
 	return &Handlers{orchestrator: orch}
 }
@@ -57,4 +61,55 @@ func (h *Handlers) HandlePing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (h *Handlers) HandleAddSSHKey(w http.ResponseWriter, r *http.Request) {
+	var req sshKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.PublicKey == "" {
+		http.Error(w, "public_key field is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.orchestrator.AddSSHKey(r.Context(), req.PublicKey); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handlers) HandleRemoveSSHKey(w http.ResponseWriter, r *http.Request) {
+	var req sshKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.PublicKey == "" {
+		http.Error(w, "public_key field is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.orchestrator.RemoveSSHKey(r.Context(), req.PublicKey); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handlers) HandleListSSHKeys(w http.ResponseWriter, r *http.Request) {
+	keys, err := h.orchestrator.ListSSHKeys(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string][]string{"keys": keys}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
 }
