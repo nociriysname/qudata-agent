@@ -33,7 +33,6 @@ func NewAuditMonitor() (*AuditMonitor, error) {
 		return nil, fmt.Errorf("failed to create audit client: %w", err)
 	}
 
-	// 1. Удаляем все старые правила с нашим ключом.
 	delRule := &rule.DeleteAllRule{
 		Type: rule.DeleteAllRuleType,
 		Keys: []string{"qudata_exec_watch"},
@@ -43,12 +42,11 @@ func NewAuditMonitor() (*AuditMonitor, error) {
 		client.Close()
 		return nil, fmt.Errorf("failed to build delete rule: %w", err)
 	}
-	// Используем DeleteRule, а не DeleteRulesKey
+
 	if err := client.DeleteRule(delBuf); err != nil {
 		log.Printf("Warning: failed to delete old audit rules: %v", err)
 	}
 
-	// 2. Добавляем правила для отслеживания.
 	for _, cmdPath := range forbiddenCommands {
 		syscallRule := &rule.SyscallRule{
 			Type:   rule.AppendSyscallRuleType,
@@ -80,8 +78,6 @@ func NewAuditMonitor() (*AuditMonitor, error) {
 		stoppedChan: make(chan struct{}),
 	}, nil
 }
-
-// Start, Stop, и runLoop остаются без изменений, так как они работают с уже полученными событиями.
 
 func (m *AuditMonitor) Start(deps lockdownDependencies) {
 	m.lockdownDeps = deps

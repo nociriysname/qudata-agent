@@ -14,8 +14,7 @@ import (
 )
 
 const (
-	// Путь к сокету, который будет слушать наш плагин.
-	// Docker daemon будет отправлять запросы на этот сокет.
+	// Путь к сокету
 	authzSocketPath = "/run/docker/plugins/qudata-authz.sock"
 )
 
@@ -23,7 +22,7 @@ const (
 var forbiddenDockerEndpoints = []string{
 	"/exec",
 	"/attach",
-	"/copy", // Устаревшее, но лучше оставить
+	"/copy",
 	"/archive",
 	"/commit",
 	"/rename",
@@ -31,7 +30,6 @@ var forbiddenDockerEndpoints = []string{
 	"/kill",
 }
 
-// AuthzPlugin - это наш HTTP-сервер для плагина авторизации.
 type AuthzPlugin struct {
 	listener net.Listener
 }

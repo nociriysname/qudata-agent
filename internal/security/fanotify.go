@@ -11,7 +11,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// FanotifyMonitor отслеживает доступ к файлу и разрешает его только для определенного PID.
 type FanotifyMonitor struct {
 	fd           int
 	watchPath    string
@@ -23,15 +22,11 @@ type FanotifyMonitor struct {
 
 // NewFanotifyMonitor создает новый монитор fanotify.
 func NewFanotifyMonitor(path string, pid int, deps lockdownDependencies) (*FanotifyMonitor, error) {
-	// 1. Инициализируем fanotify.
-	// FAN_CLASS_CONTENT - для получения событий до того, как процесс получит доступ к данным.
-	// FAN_UNLIMITED_QUEUE/MARKS - снимаем стандартные ограничения на размер очереди.
 	fd, err := unix.FanotifyInit(unix.FAN_CLASS_CONTENT|unix.FAN_CLOEXEC, unix.O_RDONLY)
 	if err != nil {
 		return nil, fmt.Errorf("FanotifyInit failed: %w", err)
 	}
 
-	// 2. Устанавливаем "метку" на файл, который хотим отслеживать.
 	// FAN_OPEN_PERM - мы хотим перехватывать события запроса на открытие файла.
 	// FAN_MARK_ADD - добавляем новую метку.
 	err = unix.FanotifyMark(fd, unix.FAN_MARK_ADD, unix.FAN_OPEN_PERM, -1, path)
@@ -60,8 +55,6 @@ func (m *FanotifyMonitor) Start() {
 func (m *FanotifyMonitor) Stop() {
 	log.Printf("[Security] Stopping fanotify monitor for path '%s'", m.watchPath)
 	close(m.stopChan)
-	// Отправляем пустой байт в пайп, чтобы разбудить read() если он заблокирован.
-	// Это стандартный трюк для немедленной остановки.
 	unix.Close(m.fd)
 	<-m.stoppedChan
 	log.Printf("[Security] Fanotify monitor stopped.", m.watchPath)
@@ -113,10 +106,9 @@ func (m *FanotifyMonitor) runLoop() {
 
 // handlePermissionEvent принимает решение: разрешить или запретить доступ.
 func (m *FanotifyMonitor) handlePermissionEvent(metadata *unix.FanotifyEventMetadata) {
-	// Создаем структуру ответа.
 	response := unix.FanotifyResponse{
 		Fd:       metadata.Fd,
-		Response: unix.FAN_DENY, // По умолчанию - запрещаем.
+		Response: unix.FAN_DENY,
 	}
 
 	// Если PID процесса совпадает с разрешенным, меняем решение.

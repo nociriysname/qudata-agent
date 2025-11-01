@@ -111,7 +111,7 @@ func (sm *SecurityMonitor) reconcileFanotify() {
 		sm.fanotifyMon = mon
 	}
 
-	// Сценарий 2: Инстанс НЕ работает, а защита fanotify - все еще включена. Нужно выключить.
+	// Сценарий 2: Инстанс не работает, а защита fanotify - все еще включена. Нужно выключить.
 	if state.Status != "running" && sm.fanotifyMon != nil {
 		log.Println("[Security] Instance is not running. Stopping fanotify protection...")
 		sm.fanotifyMon.Stop()
@@ -119,8 +119,7 @@ func (sm *SecurityMonitor) reconcileFanotify() {
 	}
 }
 
-// findQemuPID ищет PID процесса qemu-system-*, в командной строке которого
-// упоминается ID нашего контейнера.
+// findQemuPID ищет PID процесса qemu-system-*, в командной строке которого упоминается ID нашего контейнера.
 func findQemuPID(containerID string) (int, error) {
 	if len(containerID) < 12 {
 		return 0, fmt.Errorf("container ID is too short")
