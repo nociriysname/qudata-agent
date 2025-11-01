@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/docker/docker/client"
 	"github.com/google/uuid"
@@ -96,4 +97,41 @@ func (o *Orchestrator) DeleteInstance(ctx context.Context) error {
 	}
 
 	return storage.ClearState()
+}
+
+func (o *Orchestrator) AddSSHKey(ctx context.Context, publicKey string) error {
+	currentState := storage.GetState()
+	if currentState.Status != "running" || currentState.ContainerID == "" {
+		return fmt.Errorf("no active instance to add SSH key to")
+	}
+	return addSSHKey(ctx, o.dockerCli, currentState.ContainerID, publicKey)
+}
+
+func (o *Orchestrator) RemoveSSHKey(ctx context.Context, publicKey string) error {
+	currentState := storage.GetState()
+	if currentState.Status != "running" || currentState.ContainerID == "" {
+		return fmt.Errorf("no active instance to remove SSH key from")
+	}
+	return removeSSHKey(ctx, o.dockerCli, currentState.ContainerID, publicKey)
+}
+
+func (o *Orchestrator) ListSSHKeys(ctx context.Context) ([]string, error) {
+	currentState := storage.GetState()
+	if currentState.Status != "running" || currentState.ContainerID == "" {
+		return nil, fmt.Errorf("no active instance to list SSH keys from")
+	}
+
+	keysString, err := listSSHKeys(ctx, o.dockerCli, currentState.ContainerID)
+	if err != nil {
+		return nil, err
+	}
+
+	var keys []string
+	for _, key := range strings.Split(keysString, "\n") {
+		if trimmedKey := strings.TrimSpace(key); trimmedKey != "" {
+			keys = append(keys, trimmedKey)
+		}
+	}
+
+	return keys, nil
 }

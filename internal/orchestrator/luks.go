@@ -49,7 +49,7 @@ func createEncryptedVolume(ctx context.Context, state *types.InstanceState, stor
 }
 
 func deleteEncryptedVolume(ctx context.Context, state *types.InstanceState) error {
-	mapperPath := fmt.Sprintf("/dev/mapper/%s", state.LuksMapperName)
+	// mapperPath := fmt.Sprintf("/dev/mapper/%s", state.LuksMapperName)
 
 	if err := util.RunCommand(ctx, "", "umount", "-l", state.MountPoint); err != nil {
 	}
