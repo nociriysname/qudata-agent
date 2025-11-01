@@ -76,3 +76,44 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 
 	return &agentResp, nil
 }
+
+func (c *QudataClient) ReportIncident(incidentType, reason string) error {
+	incidentPayload := struct {
+		IncidentType string `json:"incident_type"`
+		Reason       string `json:"reason"`
+		Timestamp    int64  `json:"timestamp"`
+	}{
+		IncidentType: incidentType,
+		Reason:       reason,
+		Timestamp:    time.Now().Unix(),
+	}
+
+	reqBody, err := json.Marshal(incidentPayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal incident payload: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/incidents", c.baseURL)
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return fmt.Errorf("failed to create incident request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Api-Key", c.apiKey)
+	if c.secretKey != "" {
+		httpReq.Header.Set("X-Agent-Secret", c.secretKey)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to send incident report: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("server returned non-2xx status for incident report: %d", resp.StatusCode)
+	}
+
+	return nil
+}

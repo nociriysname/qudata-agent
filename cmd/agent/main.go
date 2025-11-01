@@ -12,9 +12,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nociriysname/qudata-agent/internal/api"
-	"github.com/nociriysname/qudata-agent/internal/cfg"
+	config "github.com/nociriysname/qudata-agent/internal/cfg"
 	"github.com/nociriysname/qudata-agent/internal/client"
 	"github.com/nociriysname/qudata-agent/internal/orchestrator"
+	"github.com/nociriysname/qudata-agent/internal/security"
 	"github.com/nociriysname/qudata-agent/internal/storage"
 	"github.com/nociriysname/qudata-agent/pkg/types"
 )
@@ -44,7 +45,7 @@ func main() {
 		AgentID:     uuid.NewString(),
 		AgentPort:   agentPort,
 		Address:     getOutboundIP(),
-		Fingerprint: "placeholder-fingerprint", // TODO: сделаем в следующих итерациях
+		Fingerprint: "placeholder-fingerprint",
 		PID:         os.Getpid(),
 	}
 
@@ -69,6 +70,13 @@ func main() {
 	}
 	logger.Println("Orchestrator initialized successfully.")
 
+	secMon, err := security.NewSecurityMonitor(orch, qClient)
+	if err != nil {
+		logger.Fatalf("FATAL: Failed to initialize security monitor: %v", err)
+	}
+	secMon.Run()
+	logger.Println("Security Monitor started.")
+
 	httpServer := api.NewServer(agentPort, orch)
 	logger.Printf("API server configured on port %d.", agentPort)
 
@@ -83,6 +91,8 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Println("Shutdown signal received. Shutting down gracefully...")
+
+	secMon.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
