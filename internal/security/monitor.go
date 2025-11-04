@@ -141,3 +141,20 @@ func findQemuPID(containerID string) (int, error) {
 
 	return pid, nil
 }
+
+type lockdownDepsImpl struct {
+	orch instanceDeleter
+	cli  incidentReporter
+}
+
+func (d *lockdownDepsImpl) DeleteInstance(ctx context.Context) error {
+	return d.orch.DeleteInstance(ctx)
+}
+
+func (d *lockdownDepsImpl) ReportIncident(incidentType, reason string) error {
+	return d.cli.ReportIncident(incidentType, reason)
+}
+
+func NewLockdownDependencies(orch instanceDeleter, cli incidentReporter) lockdownDependencies {
+	return &lockdownDepsImpl{orch: orch, cli: cli}
+}

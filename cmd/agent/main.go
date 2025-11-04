@@ -23,8 +23,41 @@ import (
 const agentPort = 8080
 
 func main() {
+	if security.IsWatchdogChild() {
+		runWatchdogChild()
+	} else {
+		runMainAgent()
+	}
+}
+
+func runWatchdogChild() {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Printf("FATAL [Watchdog Child]: Failed to load config: %v", err)
+		os.Exit(1)
+	}
+	qClient, err := client.NewClient(cfg.APIKey)
+	if err != nil {
+		log.Printf("FATAL [Watchdog Child]: Failed to create client: %v", err)
+		os.Exit(1)
+	}
+	orch, err := orchestrator.New()
+	if err != nil {
+		log.Printf("FATAL [Watchdog Child]: Failed to create orchestrator: %v", err)
+		os.Exit(1)
+	}
+
+	deps := security.NewLockdownDependencies(orch, qClient)
+	security.RunAsChild(deps)
+}
+
+func runMainAgent() {
 	logger := log.New(os.Stdout, "QUDATA-AGENT | ", log.LstdFlags)
-	logger.Println("Starting agent...")
+	logger.Println("Starting main agent process...")
+
+	if err := security.StartWatchdog(); err != nil {
+		logger.Fatalf("FATAL: %v", err)
+	}
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -109,8 +142,7 @@ func getOutboundIP() string {
 	if err != nil {
 		return "127.0.0.1"
 	}
-	defer conn.Close()
-
+	defer func() { _ = conn.Close() }()
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP.String()
 }
