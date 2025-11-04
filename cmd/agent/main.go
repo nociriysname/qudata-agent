@@ -13,6 +13,7 @@ import (
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/google/uuid"
 	"github.com/nociriysname/qudata-agent/internal/api"
+	"github.com/nociriysname/qudata-agent/internal/attestation"
 	config "github.com/nociriysname/qudata-agent/internal/cfg"
 	"github.com/nociriysname/qudata-agent/internal/client"
 	"github.com/nociriysname/qudata-agent/internal/orchestrator"
@@ -87,11 +88,14 @@ func runMainAgent() {
 		logger.Fatalf("FATAL: Failed to create qudata client: %v", err)
 	}
 
+	logger.Println("Generating host hardware report...")
+	hostReport := attestation.GenerateHostReport()
+
 	initReq := types.InitAgentRequest{
 		AgentID:     uuid.NewString(),
 		AgentPort:   agentPort,
 		Address:     getOutboundIP(),
-		Fingerprint: "placeholder-fingerprint",
+		Fingerprint: hostReport.Fingerprint,
 		PID:         os.Getpid(),
 	}
 
@@ -101,6 +105,21 @@ func runMainAgent() {
 		logger.Fatalf("FATAL: Failed to initialize agent on server: %v", err)
 	}
 	logger.Printf("Agent initialized successfully. Host exists: %v", agentResp.HostExists)
+
+	if !agentResp.HostExists {
+		logger.Println("Host not found on server. Registering new host...")
+		createHostReq := types.CreateHostRequest{
+			GPUName:       hostReport.GPUName,
+			GPUAmount:     hostReport.GPUAmount,
+			VRAM:          hostReport.VRAM,
+			Fingerprint:   hostReport.Fingerprint,
+			Configuration: hostReport.Configuration,
+		}
+		if err := qClient.CreateHost(createHostReq); err != nil {
+			logger.Fatalf("FATAL: Failed to register host on server: %v", err)
+		}
+		logger.Println("Host registered successfully.")
+	}
 
 	if agentResp.SecretKey != "" {
 		if err := storage.SaveSecretKey(agentResp.SecretKey); err != nil {

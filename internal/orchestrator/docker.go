@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 
 	"github.com/docker/docker/api/types"
@@ -27,7 +28,10 @@ func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.Creat
 		return "", fmt.Errorf("failed to pull image %s: %w", imageName, err)
 	}
 	defer reader.Close()
-	io.Copy(os.Stdout, reader)
+
+	if _, err := io.Copy(os.Stdout, reader); err != nil {
+		log.Printf("Warning: could not read ImagePull output: %v", err)
+	}
 
 	var envs []string
 	for k, v := range req.EnvVariables {

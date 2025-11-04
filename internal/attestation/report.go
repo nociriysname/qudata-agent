@@ -16,6 +16,6 @@ func GenerateHostReport() *HostReport {
 		GPUAmount:     GetGPUCount(),
 		VRAM:          GetVRAM(),
 		Fingerprint:   GetFingerprint(),
-		Configuration: GetConfiguration(), // Теперь вызываем публичную функцию
+		Configuration: GetConfiguration(),
 	}
 }

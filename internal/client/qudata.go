@@ -77,6 +77,37 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 	return &agentResp, nil
 }
 
+func (c *QudataClient) CreateHost(req types.CreateHostRequest) error {
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal create host request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/init/host", c.baseURL)
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return fmt.Errorf("failed to create http request for create host: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Api-Key", c.apiKey)
+	if c.secretKey != "" {
+		httpReq.Header.Set("X-Agent-Secret", c.secretKey)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to send create host request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("server returned non-2xx status for create host: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 func (c *QudataClient) ReportIncident(incidentType, reason string) error {
 	incidentPayload := struct {
 		IncidentType string `json:"incident_type"`
