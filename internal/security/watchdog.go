@@ -55,6 +55,7 @@ func StartWatchdog() error {
 	if err != nil {
 		return fmt.Errorf("could not create watchdog pipe: %w", err)
 	}
+	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
@@ -70,6 +71,7 @@ func StartWatchdog() error {
 func pingChild(pipe io.WriteCloser) {
 	ticker := time.NewTicker(watchdogPingInterval)
 	defer ticker.Stop()
+	defer pipe.Close()
 
 	for range ticker.C {
 		if _, err := pipe.Write([]byte{'.'}); err != nil {

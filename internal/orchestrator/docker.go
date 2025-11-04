@@ -16,11 +16,10 @@ import (
 )
 
 const (
-	kataRuntime       = "kata-qemu"
 	containerDataPath = "/data"
 )
 
-func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.CreateInstanceRequest, state *agenttypes.InstanceState, iommuGroupPath string) (string, error) {
+func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.CreateInstanceRequest, state *agenttypes.InstanceState, iommuGroupPath string, runtimeName string) (string, error) {
 	imageName := fmt.Sprintf("%s:%s", req.Image, req.ImageTag)
 
 	reader, err := cli.ImagePull(ctx, imageName, types.ImagePullOptions{})
@@ -58,7 +57,7 @@ func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.Creat
 	}
 
 	hostConfig := &container.HostConfig{
-		Runtime: kataRuntime,
+		Runtime: runtimeName,
 		Mounts: []mount.Mount{
 			{
 				Type:   mount.TypeBind,

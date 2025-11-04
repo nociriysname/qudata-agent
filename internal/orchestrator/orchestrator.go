@@ -79,7 +79,8 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 		return fmt.Errorf("failed to create encrypted volume: %w", err)
 	}
 
-	containerID, err := runContainer(ctx, o.dockerCli, &req, newState, iommuGroupPath)
+	runtimeName := SelectRuntime(req.IsConfidential)
+	containerID, err := runContainer(ctx, o.dockerCli, &req, newState, iommuGroupPath, runtimeName)
 	if err != nil {
 		if newState.PciAddress != "" {
 			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
