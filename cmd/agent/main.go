@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreos/go-systemd/daemon"
 	"github.com/google/uuid"
 	"github.com/nociriysname/qudata-agent/internal/api"
 	config "github.com/nociriysname/qudata-agent/internal/cfg"
@@ -57,6 +58,18 @@ func runMainAgent() {
 
 	if err := security.StartWatchdog(); err != nil {
 		logger.Fatalf("FATAL: %v", err)
+	}
+
+	interval, err := daemon.SdWatchdogEnabled(false)
+	if err == nil && interval > 0 {
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for range ticker.C {
+				daemon.SdNotify(false, daemon.SdNotifyWatchdog)
+			}
+		}()
+		logger.Println("Systemd watchdog enabled.")
 	}
 
 	cfg, err := config.LoadConfig()
@@ -120,10 +133,15 @@ func runMainAgent() {
 		}
 	}()
 
+	daemon.SdNotify(false, daemon.SdNotifyReady)
+	logger.Println("Agent is ready and running.")
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Println("Shutdown signal received. Shutting down gracefully...")
+
+	daemon.SdNotify(false, daemon.SdNotifyStopping)
 
 	secMon.Stop()
 

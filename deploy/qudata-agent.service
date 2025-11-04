@@ -12,8 +12,8 @@ WorkingDirectory=/opt/qudata-agent
 
 Restart=always
 RestartSec=5s
-# WatchdogSec=30 # Включим, когда реализуем нотификации в Go
-# Type=notify   # Аналогично
+WatchdogSec=30
+Type=notify
 
 Environment="QUDATA_API_KEY=YOUR_API_KEY_PLACEHOLDER"
 
