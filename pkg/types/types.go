@@ -19,6 +19,7 @@ type CreateInstanceRequest struct {
 	EnvVariables map[string]string `json:"env_variables"`
 	Ports        map[string]string `json:"ports"`
 	SSHEnabled   bool              `json:"ssh_enabled"`
+	GPUCount     int               `json:"gpu_count"`
 	// IsConfidential bool `json:"is_confidential"`
 }
 
