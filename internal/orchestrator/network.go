@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/docker/docker/client"
-	"github.com/nociriysname/qudata-agent/internal/util"
+	"github.com/nociriysname/qudata-agent/internal/utils"
 )
 
 // Стандартные приватные сети, доступ к которым нужно заблокировать.
@@ -45,7 +45,7 @@ func applyNetworkIsolation(ctx context.Context, containerIP string) error {
 			"-d", network,
 			"-j", "REJECT",
 		}
-		if err := util.RunCommand(ctx, "", "iptables", args...); err != nil && !strings.Contains(err.Error(), "rule already exists") {
+		if err := utils.RunCommand(ctx, "", "iptables", args...); err != nil && !strings.Contains(err.Error(), "rule already exists") {
 			return fmt.Errorf("failed to apply iptables rule for network %s: %w", network, err)
 		}
 	}
@@ -68,7 +68,7 @@ func removeNetworkIsolation(ctx context.Context, containerIP string) error {
 			"-j", "REJECT",
 		}
 
-		if err := util.RunCommand(ctx, "", "iptables", args...); err != nil && !strings.Contains(err.Error(), "does not exist") {
+		if err := utils.RunCommand(ctx, "", "iptables", args...); err != nil && !strings.Contains(err.Error(), "does not exist") {
 			fmt.Printf("Warning: failed to remove iptables rule for IP %s, network %s: %v\n", containerIP, network, err)
 		}
 	}
