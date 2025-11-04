@@ -1,5 +1,7 @@
 package types
 
+import "github.com/nociriysname/qudata-agent/internal/attestation"
+
 type InstanceState struct {
 	InstanceID     string            `json:"instance_id"`
 	ContainerID    string            `json:"container_id"`
@@ -36,4 +38,12 @@ type AgentResponse struct {
 	EmergencyReinit bool   `json:"emergency_reinit"`
 	HostExists      bool   `json:"host_exists"`
 	SecretKey       string `json:"secret_key,omitempty"`
+}
+
+type CreateHostRequest struct {
+	GPUName       string                        `json:"gpu_name"`
+	GPUAmount     int                           `json:"gpu_amount"`
+	VRAM          float64                       `json:"vram"`
+	Fingerprint   string                        `json:"fingerprint"`
+	Configuration attestation.ConfigurationData `json:"configuration"`
 }
