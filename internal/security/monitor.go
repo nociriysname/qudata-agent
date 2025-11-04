@@ -155,6 +155,6 @@ func (d *lockdownDepsImpl) ReportIncident(incidentType, reason string) error {
 	return d.cli.ReportIncident(incidentType, reason)
 }
 
-func NewLockdownDependencies(orch instanceDeleter, cli incidentReporter) lockdownDependencies {
+func NewLockdownDependencies(orch instanceDeleter, cli incidentReporter) LockdownDependencies {
 	return &lockdownDepsImpl{orch: orch, cli: cli}
 }

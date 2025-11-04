@@ -27,7 +27,7 @@ func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.Creat
 	if err != nil {
 		return "", fmt.Errorf("failed to pull image %s: %w", imageName, err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if _, err := io.Copy(os.Stdout, reader); err != nil {
 		log.Printf("Warning: could not read ImagePull output: %v", err)

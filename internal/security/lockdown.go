@@ -13,12 +13,12 @@ import (
 
 const lockdownFilePath = "/var/lib/qudata/lockdown.lock"
 
-type lockdownDependencies interface {
+type LockdownDependencies interface {
 	DeleteInstance(ctx context.Context) error
 	ReportIncident(incidentType, reason string) error
 }
 
-func InitiateLockdown(deps lockdownDependencies, reason string) {
+func InitiateLockdown(deps LockdownDependencies, reason string) {
 	log.Printf("!!! CRITICAL SECURITY THREAT DETECTED !!! Reason: %s", reason)
 	log.Println("!!! INITIATING EMERGENCY LOCKDOWN !!!")
 
