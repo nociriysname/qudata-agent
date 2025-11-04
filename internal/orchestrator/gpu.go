@@ -5,6 +5,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,6 +50,14 @@ func returnGPUToHost(ctx context.Context, pciAddress, originalDriver string) err
 	bindPath := fmt.Sprintf("/sys/bus/pci/drivers/%s/bind", originalDriver)
 	if err := utils.RunCommand(ctx, "", "tee", bindPath, fmt.Sprintf("0000:%s", pciAddress)); err != nil {
 		return fmt.Errorf("failed to re-bind GPU to '%s' driver: %w", originalDriver, err)
+	}
+
+	time.Sleep(2 * time.Second)
+	log.Printf("Performing hardware reset for GPU %s...", pciAddress)
+	if err := utils.RunCommand(ctx, "", "nvidia-smi", "-r"); err != nil {
+		log.Printf("Warning: 'nvidia-smi -r' failed, GPU state may not be clean: %v", err)
+	} else {
+		log.Printf("GPU hardware reset successful.")
 	}
 
 	return nil
