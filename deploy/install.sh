@@ -11,7 +11,7 @@ NC='\033[0m'
 
 echo ""
 echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     QuData Agent (Go) Installer        ║${NC}"
+echo -e "${BLUE}║        QuData Agent Installer          ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -46,10 +46,12 @@ systemctl enable --now docker > /dev/null 2>&1
 echo -e "${GREEN}✓ Docker is running${NC}"
 
 # --- Шаг 3: Kata Containers ---
-echo -e "${YELLOW}[3/6] Installing Kata Containers v${KATA_VERSION}...${NC}"
+echo -e "${YELLOW}[3/6] Installing and configuring Kata Containers v${KATA_VERSION}...${NC}"
 if ! command -v kata-runtime &> /dev/null; then
     ARCH=$(uname -m)
-    [ "$ARCH" != "x86_64" ] && { echo -e "${RED}Unsupported architecture: $ARCH${NC}"; exit 1; }
+    if [ "$ARCH" != "x86_64" ]; then
+        echo -e "${RED}Unsupported architecture: $ARCH${NC}"; exit 1;
+    fi
 
     KATA_PACKAGE="kata-static-${KATA_VERSION}-amd64.tar.xz"
     KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_PACKAGE}"
@@ -65,12 +67,45 @@ if ! command -v kata-runtime &> /dev/null; then
     echo "  Creating symlink for kata-runtime..."
     ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
 
-    echo "  Configuring Docker for Kata..."
+    echo "  Creating Kata configuration files..."
+    mkdir -p /etc/kata-containers
+    # Копируем наши шаблоны в системную директорию
+    # Предполагаем, что скрипт запускается из корня репозитория, где есть папка deploy
+    cp "deploy/kata-configuration.toml" "/etc/kata-containers/configuration.toml"
+    cp "deploy/kata-configuration-cvm.toml" "/etc/kata-containers/configuration-cvm.toml"
+
+    echo "  Configuring Docker for multiple Kata runtimes..."
     mkdir -p /etc/docker
-    cat /etc/docker/daemon.json | jq '. + {"runtimes": {"kata-qemu": {"path": "/usr/local/bin/kata-runtime"}}}' > /etc/docker/daemon.json.tmp && mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
+    # Создаем базовый daemon.json, если его нет
+    if [ ! -f /etc/docker/daemon.json ]; then
+        echo '{}' > /etc/docker/daemon.json
+    fi
+    # Используем jq для безопасного добавления ДВУХ рантаймов
+    # Сначала создаем временный файл, чтобы не повредить оригинал при ошибке
+    TEMP_JSON=$(mktemp)
+    jq '.runtimes += {
+        "kata-qemu": {
+            "path": "/usr/local/bin/kata-runtime",
+            "runtimeArgs": [
+                "--kata-config-path=/etc/kata-containers/configuration.toml"
+            ]
+        },
+        "kata-cvm": {
+            "path": "/usr/local/bin/kata-runtime",
+            "runtimeArgs": [
+                "--kata-config-path=/etc/kata-containers/configuration-cvm.toml"
+            ]
+        }
+    }' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+
+    # Добавляем плагин авторизации
+    jq '. + {"authorization-plugins": ["qudata-authz"]}' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+
+    mkdir -p /etc/docker/plugins
+    echo '{"Socket": "qudata-authz.sock"}' > /etc/docker/plugins/qudata-authz.json
 
     systemctl restart docker
-    echo -e "${GREEN}✓ Kata Containers installed and configured${NC}"
+    echo -e "${GREEN}✓ Kata Containers with QEMU and CVM runtimes configured${NC}"
 else
     echo -e "${GREEN}✓ Kata Containers already installed${NC}"
 fi
@@ -82,6 +117,7 @@ if [ ! -f "go.mod" ]; then
 fi
 
 echo "  Building agent binary..."
+# CGO_ENABLED=0 делает бинарник статически скомпонованным, -ldflags="-s -w" уменьшает его размер.
 CGO_ENABLED=0 go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent
 chmod +x /usr/local/bin/qudata-agent
 
@@ -90,6 +126,7 @@ echo -e "${GREEN}✓ Agent binary installed to /usr/local/bin/qudata-agent${NC}"
 
 # --- Шаг 5: Настройка безопасности ---
 echo -e "${YELLOW}[5/6] Configuring security modules (Auditd, AppArmor)...${NC}"
+# Auditd
 tee "/etc/audit/rules.d/99-qudata.rules" > /dev/null <<EOF
 -w /usr/bin/virsh -p x -k qudata_exec_watch
 -w /usr/bin/qemu-img -p x -k qudata_exec_watch
@@ -106,6 +143,7 @@ echo -e "${GREEN}✓ Security modules configured${NC}"
 # --- Шаг 6: Создание и запуск сервиса ---
 echo -e "${YELLOW}[6/6] Starting QuData Agent service...${NC}"
 cp "deploy/qudata-agent.service" /etc/systemd/system/qudata-agent.service
+# Заменяем плейсхолдер API_KEY в сервисном файле
 sed -i "s/YOUR_API_KEY_PLACEHOLDER/$API_KEY/g" /etc/systemd/system/qudata-agent.service
 
 systemctl daemon-reload

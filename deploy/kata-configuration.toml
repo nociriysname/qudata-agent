@@ -1,0 +1,2 @@
+[hypervisor.qemu]
+image = "/opt/kata/share/kata-containers/kata-containers.image"

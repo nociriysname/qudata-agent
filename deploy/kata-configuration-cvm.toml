@@ -1,0 +1,4 @@
+imports = ["/etc/kata-containers/configuration.toml"]
+
+[hypervisor.qemu]
+confidential_guest = true

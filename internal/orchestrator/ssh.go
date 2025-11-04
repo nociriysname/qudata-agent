@@ -23,7 +23,6 @@ func addSSHKey(ctx context.Context, cli *client.Client, containerID, publicKey s
 	return execInContainer(ctx, cli, containerID, []string{"sh", "-c", cmd})
 }
 
-// removeSSHKey удаляет публичный SSH-ключ из authorized_keys контейнера.
 func removeSSHKey(ctx context.Context, cli *client.Client, containerID, publicKey string) error {
 	if !strings.HasPrefix(publicKey, "ssh-") {
 		return fmt.Errorf("invalid public key format")
