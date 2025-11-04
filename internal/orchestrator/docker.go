@@ -20,7 +20,7 @@ const (
 	containerDataPath = "/data"
 )
 
-func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.CreateInstanceRequest, state *agenttypes.InstanceState) (string, error) {
+func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.CreateInstanceRequest, state *agenttypes.InstanceState, iommuGroupPath string) (string, error) {
 	imageName := fmt.Sprintf("%s:%s", req.Image, req.ImageTag)
 
 	reader, err := cli.ImagePull(ctx, imageName, types.ImagePullOptions{})
@@ -67,6 +67,21 @@ func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.Creat
 			},
 		},
 		PortBindings: portBindings,
+	}
+
+	if iommuGroupPath != "" {
+		hostConfig.Devices = []container.DeviceMapping{
+			{
+				PathOnHost:        "/dev/vfio/vfio",
+				PathInContainer:   "/dev/vfio/vfio",
+				CgroupPermissions: "rwm",
+			},
+			{
+				PathOnHost:        iommuGroupPath,
+				PathInContainer:   iommuGroupPath,
+				CgroupPermissions: "rwm",
+			},
+		}
 	}
 
 	resp, err := cli.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")

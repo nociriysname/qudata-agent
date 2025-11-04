@@ -59,23 +59,61 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 		AllocatedPorts: req.Ports,
 	}
 
+	var iommuGroupPath string
+
+	if req.GPUCount > 0 {
+		pciAddress, originalDriver, iommuPath, err := prepareGPUForPassthrough(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to prepare GPU for passthrough: %w", err)
+		}
+		newState.PciAddress = pciAddress
+		newState.OriginalDriver = originalDriver
+		iommuGroupPath = iommuPath
+	}
+
 	if err := createEncryptedVolume(ctx, newState, req.StorageGB); err != nil {
+		if newState.PciAddress != "" {
+			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
+		}
 		_ = deleteEncryptedVolume(context.Background(), newState)
 		return fmt.Errorf("failed to create encrypted volume: %w", err)
 	}
 
-	containerID, err := runContainer(ctx, o.dockerCli, &req, newState)
+	containerID, err := runContainer(ctx, o.dockerCli, &req, newState, iommuGroupPath)
 	if err != nil {
+		if newState.PciAddress != "" {
+			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
+		}
 		_ = deleteEncryptedVolume(context.Background(), newState)
 		return fmt.Errorf("failed to run container: %w", err)
 	}
-
 	newState.ContainerID = containerID
-	newState.Status = "running"
 
+	containerIP, err := getContainerIP(ctx, o.dockerCli, containerID)
+	if err != nil {
+		_ = removeContainer(context.Background(), o.dockerCli, containerID)
+		_ = deleteEncryptedVolume(context.Background(), newState)
+		if newState.PciAddress != "" {
+			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
+		}
+		return fmt.Errorf("failed to get container IP for network isolation: %w", err)
+	}
+	if err := applyNetworkIsolation(ctx, containerIP); err != nil {
+		_ = removeContainer(context.Background(), o.dockerCli, containerID)
+		_ = deleteEncryptedVolume(context.Background(), newState)
+		if newState.PciAddress != "" {
+			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
+		}
+		return fmt.Errorf("failed to apply network isolation: %w", err)
+	}
+
+	newState.Status = "running"
 	if err := storage.SaveState(newState); err != nil {
 		_ = removeContainer(context.Background(), o.dockerCli, containerID)
 		_ = deleteEncryptedVolume(context.Background(), newState)
+		if newState.PciAddress != "" {
+			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
+		}
 		return fmt.Errorf("CRITICAL: failed to save state after instance creation: %w", err)
 	}
 
@@ -88,8 +126,25 @@ func (o *Orchestrator) DeleteInstance(ctx context.Context) error {
 		return nil
 	}
 
+	containerIP, err := getContainerIP(ctx, o.dockerCli, currentState.ContainerID)
+	if err != nil {
+		fmt.Printf("Warning: could not get container IP for cleanup: %v\n", err)
+	}
+
 	if err := removeContainer(ctx, o.dockerCli, currentState.ContainerID); err != nil {
 		fmt.Printf("Warning: failed to remove container during deletion: %v\n", err)
+	}
+
+	if containerIP != "" {
+		if err := removeNetworkIsolation(ctx, containerIP); err != nil {
+			fmt.Printf("Warning: failed to remove network isolation: %v\n", err)
+		}
+	}
+
+	if currentState.PciAddress != "" && currentState.OriginalDriver != "" {
+		if err := returnGPUToHost(ctx, currentState.PciAddress, currentState.OriginalDriver); err != nil {
+			fmt.Printf("Warning: failed to return GPU to host: %v\n", err)
+		}
 	}
 
 	if err := deleteEncryptedVolume(ctx, &currentState); err != nil {
