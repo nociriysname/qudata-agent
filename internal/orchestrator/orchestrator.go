@@ -26,7 +26,11 @@ type Orchestrator struct {
 }
 
 func New() (*Orchestrator, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	customHeaders := map[string]string{
+		"X-Qudata-Agent": "true",
+	}
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation(), client.WithHTTPHeaders(customHeaders))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
 	}

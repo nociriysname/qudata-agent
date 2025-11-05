@@ -89,9 +89,10 @@ func (p *AuthzPlugin) handleActivate(w http.ResponseWriter, r *http.Request) {
 
 // authzRequest - структура для парсинга запроса от Docker daemon.
 type authzRequest struct {
-	RequestMethod string `json:"RequestMethod"`
-	RequestUri    string `json:"RequestUri"`
-	User          string `json:"User"`
+	RequestMethod  string            `json:"RequestMethod"`
+	RequestUri     string            `json:"RequestUri"`
+	User           string            `json:"User"`
+	RequestHeaders map[string]string `json:"RequestHeaders"`
 }
 
 // authzResponse - структура для ответа Docker daemon'у.
@@ -111,7 +112,15 @@ func (p *AuthzPlugin) handleAllow(w http.ResponseWriter, r *http.Request) {
 	// Проверяем, содержит ли URI запроса что-либо из нашего черного списка.
 	for _, endpoint := range forbiddenDockerEndpoints {
 		if strings.Contains(req.RequestUri, endpoint) {
-			log.Printf("!!! SECURITY ALERT [authz] !!! DENIED dangerous Docker API call from user '%s': %s %s",
+			// Если это опасная операция, проверяем наличие нашего "секретного" заголовка.
+			if agentHeader, ok := req.RequestHeaders["X-Qudata-Agent"]; ok && agentHeader == "true" {
+				log.Printf("[Security] [authz] ALLOWED agent-initiated sensitive call: %s %s", req.RequestMethod, req.RequestUri)
+				p.respond(w, true, "")
+				return
+			}
+
+			// Заголовка нет, значит, это внешний вызов. Блокируем.
+			log.Printf("!!! SECURITY ALERT [authz] !!! DENIED external Docker API call from user '%s': %s %s",
 				req.User, req.RequestMethod, req.RequestUri)
 			p.respond(w, false, "Action denied by Qudata Agent security policy.")
 			return

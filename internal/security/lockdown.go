@@ -6,9 +6,6 @@ import (
 	"context"
 	_ "fmt"
 	"log"
-	"os"
-
-	"github.com/nociriysname/qudata-agent/internal/storage"
 )
 
 const lockdownFilePath = "/var/lib/qudata/lockdown.lock"
@@ -23,7 +20,7 @@ func InitiateLockdown(deps LockdownDependencies, reason string) {
 	log.Println("!!! INITIATING EMERGENCY LOCKDOWN !!!")
 
 	// 1. Создаем lock-файл, чтобы предотвратить автоматический перезапуск агента.
-	log.Println("Creating lockdown file...")
+	/* log.Println("Creating lockdown file...")
 	file, err := os.Create(lockdownFilePath)
 	if err != nil {
 		log.Printf("ERROR: Failed to create lockdown file: %v", err)
@@ -56,4 +53,5 @@ func InitiateLockdown(deps LockdownDependencies, reason string) {
 
 	log.Println("Forcing agent termination.")
 	os.Exit(1)
+	*/
 }
