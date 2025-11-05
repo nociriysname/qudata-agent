@@ -113,34 +113,45 @@ if ! command -v kata-runtime &> /dev/null; then
     cp "deploy/kata-configuration.toml" "/etc/kata-containers/configuration.toml"
     cp "deploy/kata-configuration-cvm.toml" "/etc/kata-containers/configuration-cvm.toml"
 
-    echo "  Configuring Docker for multiple Kata runtimes..."
+    echo "  Configuring Docker for NVIDIA, Kata, and Authz Plugin..."
     mkdir -p /etc/docker
+
+    # Создаем базовый daemon.json, если его нет
     if [ ! -f /etc/docker/daemon.json ]; then
         echo '{}' > /etc/docker/daemon.json
     fi
+
+    # Используем одну команду, которая последовательно применяет все изменения
     TEMP_JSON=$(mktemp)
-    jq '.runtimes += {
-        "kata-qemu": {
+    jq '
+        # Убеждаемся, что .runtimes существует и является объектом
+        .runtimes = (.runtimes // {}) |
+
+        # Добавляем/обновляем kata-qemu
+        .runtimes["kata-qemu"] = {
             "path": "/usr/local/bin/kata-runtime",
             "runtimeArgs": [
                 "--kata-config-path=/etc/kata-containers/configuration.toml"
             ]
-        },
-        "kata-cvm": {
+        } |
+
+        # Добавляем/обновляем kata-cvm
+        .runtimes["kata-cvm"] = {
             "path": "/usr/local/bin/kata-runtime",
             "runtimeArgs": [
                 "--kata-config-path=/etc/kata-containers/configuration-cvm.toml"
             ]
-        }
-    }' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+        } |
 
-    jq '. + {"authorization-plugins": ["qudata-authz"]}' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+        # Добавляем/обновляем плагин авторизации
+        .["authorization-plugins"] = ["qudata-authz"]
+    ' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
 
     mkdir -p /etc/docker/plugins
     echo '{"Socket": "qudata-authz.sock"}' > /etc/docker/plugins/qudata-authz.json
 
     systemctl restart docker
-    echo -e "${GREEN}✓ Kata Containers with QEMU and CVM runtimes configured${NC}"
+    echo -e "${GREEN}✓ Docker daemon configured successfully${NC}"
 else
     echo -e "${GREEN}✓ Kata Containers already installed${NC}"
 fi
