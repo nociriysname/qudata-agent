@@ -17,11 +17,11 @@ type FanotifyMonitor struct {
 	allowedPID   int
 	stopChan     chan struct{}
 	stoppedChan  chan struct{}
-	lockdownDeps lockdownDependencies
+	lockdownDeps LockdownDependencies
 }
 
 // NewFanotifyMonitor создает новый монитор fanotify.
-func NewFanotifyMonitor(path string, pid int, deps lockdownDependencies) (*FanotifyMonitor, error) {
+func NewFanotifyMonitor(path string, pid int, deps LockdownDependencies) (*FanotifyMonitor, error) {
 	fd, err := unix.FanotifyInit(unix.FAN_CLASS_CONTENT|unix.FAN_CLOEXEC, unix.O_RDONLY)
 	if err != nil {
 		return nil, fmt.Errorf("FanotifyInit failed: %w", err)

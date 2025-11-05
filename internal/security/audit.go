@@ -24,7 +24,7 @@ type AuditMonitor struct {
 	client       *libaudit.AuditClient
 	stopChan     chan struct{}
 	stoppedChan  chan struct{}
-	lockdownDeps lockdownDependencies
+	lockdownDeps LockdownDependencies
 }
 
 func NewAuditMonitor() (*AuditMonitor, error) {
@@ -79,7 +79,7 @@ func NewAuditMonitor() (*AuditMonitor, error) {
 	}, nil
 }
 
-func (m *AuditMonitor) Start(deps lockdownDependencies) {
+func (m *AuditMonitor) Start(deps LockdownDependencies) {
 	m.lockdownDeps = deps
 	log.Println("[Security] Starting auditd event listener...")
 	go m.runLoop()

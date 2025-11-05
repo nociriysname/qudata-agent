@@ -21,7 +21,7 @@ func IsWatchdogChild() bool {
 	return os.Getenv(watchdogEnvVar) == "1"
 }
 
-func RunAsChild(deps lockdownDependencies) {
+func RunAsChild(deps LockdownDependencies) {
 	log.Println("[Watchdog] Running as child process. Monitoring parent...")
 
 	stdin := os.Stdin
