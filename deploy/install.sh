@@ -88,7 +88,7 @@ if ! command -v kata-runtime &> /dev/null; then
     curl -fLo "/tmp/$KATA_PACKAGE" "$KATA_URL"
     echo "  Extracting package to /opt/kata..."
     mkdir -p /opt/kata
-    tar -xJf "/tmp/$KATA_PACKAGE" -C /opt/kata
+    tar -xJf "/tmp/$KATA_PACKAGE" -C /opt/kata --strip-components=2
     rm -f "/tmp/$KATA_PACKAGE"
     echo "  Creating symlink for kata-runtime..."
     ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
