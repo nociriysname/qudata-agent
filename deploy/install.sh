@@ -47,41 +47,44 @@ echo -e "${GREEN}✓ Docker is running${NC}"
 
 # --- Шаг 3: Установка NVIDIA Driver & Toolkit ---
 echo -e "${YELLOW}[3/7] Installing NVIDIA components...${NC}"
-# Устанавливаем заголовочные файлы ядра, необходимые для драйвера
-apt-get install -y linux-headers-$(uname -r) > /dev/null 2>&1
 
-# Проверяем, есть ли GPU
+# Проверяем наличие GPU
 if ! lspci | grep -iq nvidia; then
-    echo -e "${YELLOW}Warning: No NVIDIA GPU detected. Skipping driver installation.${NC}"
+    echo -e "${YELLOW}Warning: No NVIDIA GPU detected. Skipping driver and toolkit installation.${NC}"
+    # Устанавливаем только dev-библиотеку для CGO, если вдруг она понадобится без GPU
+    apt-get install -y libnvidia-ml-dev > /dev/null 2>&1 || true
 else
-    # Устанавливаем драйверы, если команда nvidia-smi не найдена
-    if ! command -v nvidia-smi &> /dev/null; then
-        echo "  NVIDIA driver not found. Installing driver via ubuntu-drivers..."
-        # ubuntu-drivers autoinstall - это самый надежный способ для Ubuntu
-        ubuntu-drivers autoinstall
-        echo -e "${YELLOW}NVIDIA driver installation initiated. A REBOOT IS REQUIRED to load it.${NC}"
-        echo -e "${YELLOW}After reboot, please run this install script again to complete the setup.${NC}"
-        exit 0
+    echo "  NVIDIA GPU detected."
+    # Проверяем, работает ли драйвер
+    if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
+        echo "  NVIDIA driver is already installed and working."
     else
-        echo "  NVIDIA driver already installed."
+        echo "  NVIDIA driver not found or not working. Attempting installation..."
+        # Устанавливаем заголовочные файлы ядра
+        apt-get install -y linux-headers-$(uname -r) > /dev/null 2>&1
+        # Пытаемся установить драйверы
+        ubuntu-drivers autoinstall
+        echo -e "${YELLOW}NVIDIA driver installation initiated. A REBOOT IS REQUIRED to apply changes.${NC}"
+        echo -e "${YELLOW}After reboot, please run this install script again.${NC}"
+        exit 0
     fi
+
+    echo "  Installing NVIDIA Container Toolkit..."
+    # Устанавливаем ключ репозитория NVIDIA
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+      && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+
+    apt-get update -qq
+    # Устанавливаем сам toolkit и dev-библиотеку для CGO
+    apt-get install -y --no-install-recommends nvidia-container-toolkit libnvidia-ml-dev 2>&1 | grep -v "^Reading\|^Building" || true
+
+    # Конфигурируем Docker для использования NVIDIA runtime
+    nvidia-ctk runtime configure --runtime=docker
+    systemctl restart docker
+    echo -e "${GREEN}✓ NVIDIA components installed and configured${NC}"
 fi
-
-echo "  Installing NVIDIA Container Toolkit..."
-# Устанавливаем ключ репозитория NVIDIA
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-  && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-    tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-
-apt-get update -qq
-# Устанавливаем сам toolkit и dev-библиотеку для CGO
-apt-get install -y --no-install-recommends nvidia-container-toolkit libnvidia-ml-dev 2>&1 | grep -v "^Reading\|^Building" || true
-
-# Конфигурируем Docker для использования NVIDIA runtime
-nvidia-ctk runtime configure --runtime=docker
-systemctl restart docker
-echo -e "${GREEN}✓ NVIDIA components installed and configured${NC}"
 
 # --- Шаг 4: Kata Containers ---
 echo -e "${YELLOW}[4/7] Installing and configuring Kata Containers v${KATA_VERSION}...${NC}"
