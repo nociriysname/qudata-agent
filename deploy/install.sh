@@ -124,18 +124,31 @@ echo -e "${GREEN}✓ Kata Containers runtimes configured${NC}"
 
 # --- Шаг 5: Установка Go ---
 echo -e "${YELLOW}[5/8] Installing Go toolchain...${NC}"
-GO_VERSION="1.25" # Указываем ту же версию, что и в go.mod
-if ! [ -x "/usr/local/go/bin/go" ]; then
-    echo "  Downloading Go v${GO_VERSION}..."
-    wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
-    # Удаляем старую версию, если она есть
+# Извлекаем требуемую версию из go.mod
+REQUIRED_GO_VERSION=$(grep -oP '^go\s+\K[0-9]+\.[0-9]+(\.[0-9]+)?' go.mod)
+if [ -z "$REQUIRED_GO_VERSION" ]; then
+    echo -e "${RED}Error: Could not determine Go version from go.mod. Using default.${NC}"
+    REQUIRED_GO_VERSION="1.25.0" # Запасной вариант
+fi
+# Проверяем, установлена ли Go и какая у нее версия
+INSTALLED_GO_VERSION=""
+if [ -x "/usr/local/go/bin/go" ]; then
+    # Извлекаем номер версии из вывода "go version", например "1.22.3"
+    INSTALLED_GO_VERSION=$("/usr/local/go/bin/go" version | grep -oP 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/go//')
+fi
+# Сравниваем требуемую и установленную версии
+if [ "$INSTALLED_GO_VERSION" != "$REQUIRED_GO_VERSION" ]; then
+    echo "  Go v${REQUIRED_GO_VERSION} not found or version mismatch (found v${INSTALLED_GO_VERSION:-none}). Installing..."
+    # Формируем имя файла для скачивания
+    GO_TARBALL="go${REQUIRED_GO_VERSION}.linux-amd64.tar.gz"
+    wget -q "https://go.dev/dl/${GO_TARBALL}" -O "/tmp/${GO_TARBALL}"
+    # Удаляем старую версию перед установкой новой
     rm -rf /usr/local/go
-    # Распаковываем в /usr/local
-    tar -C /usr/local -xzf /tmp/go.tar.gz
-    rm /tmp/go.tar.gz
-    echo -e "${GREEN}✓ Go toolchain installed${NC}"
+    tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
+    rm "/tmp/${GO_TARBALL}"
+    echo -e "${GREEN}✓ Go toolchain v${REQUIRED_GO_VERSION} installed${NC}"
 else
-    echo -e "${GREEN}✓ Go toolchain already installed${NC}"
+    echo -e "${GREEN}✓ Go toolchain v${REQUIRED_GO_VERSION} is already installed${NC}"
 fi
 
 # --- Шаг 6: Сборка и установка Go-агента ---
