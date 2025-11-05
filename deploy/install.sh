@@ -124,19 +124,30 @@ echo -e "${GREEN}✓ Kata Containers runtimes configured${NC}"
 
 # --- Шаг 5: Установка Go ---
 echo -e "${YELLOW}[5/8] Installing Go toolchain...${NC}"
-GO_VERSION="1.22.3" # Актуальная стабильная версия
-# Проверяем, существует ли исполняемый файл Go по нашему пути
-if ! [ -x "/usr/local/go/bin/go" ]; then
-    echo "  Downloading Go v${GO_VERSION}..."
+
+# Ищем строку "go X.XX" в go.mod и извлекаем номер версии.
+# `grep -oP` использует Perl-совместимый регекс для поиска.
+# `^go\s+` - строка начинается с "go" и одного или более пробелов.
+# `\K` - сбрасывает "найденную" часть, чтобы в результат попало только то, что дальше.
+# `[0-9]+\.[0-9]+(\.[0-9]+)?` - ищет версию в формате X.Y или X.Y.Z.
+GO_VERSION=$(grep -oP '^go\s+\K[0-9]+\.[0-9]+(\.[0-9]+)?' go.mod)
+
+if [ -z "$GO_VERSION" ]; then
+    echo -e "${RED}Error: Could not determine Go version from go.mod. Using default.${NC}"
+    GO_VERSION="1.25" # Запасной вариант на случай ошибки
+fi
+
+INSTALLED_GO_VERSION=$("/usr/local/go/bin/go" version 2>/dev/null | grep -oP 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/go//')
+
+if [ "$INSTALLED_GO_VERSION" != "$GO_VERSION" ]; then
+    echo "  Go v${GO_VERSION} not found or version mismatch. Installing..."
     wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
-    # Удаляем старую версию, если она есть
     rm -rf /usr/local/go
-    # Распаковываем в /usr/local
     tar -C /usr/local -xzf /tmp/go.tar.gz
     rm /tmp/go.tar.gz
-    echo -e "${GREEN}✓ Go toolchain installed${NC}"
+    echo -e "${GREEN}✓ Go toolchain v${GO_VERSION} installed${NC}"
 else
-    echo -e "${GREEN}✓ Go toolchain already installed${NC}"
+    echo -e "${GREEN}✓ Go toolchain v${GO_VERSION} already installed${NC}"
 fi
 
 # --- Шаг 6: Сборка и установка Go-агента ---
