@@ -158,6 +158,14 @@ echo -e "${YELLOW}[6/8] Building and installing QuData Agent...${NC}"
 if [ ! -f "go.mod" ]; then
     echo -e "${RED}Error: go.mod not found. Please run this script from the project root directory.${NC}"; exit 1;
 fi
+echo "  Locating libnvidia-ml.so..."
+# Ищем директорию, содержащую libnvidia-ml.so
+LIB_PATH=$(find /usr -name "libnvidia-ml.so" -printf "%h" -quit)
+if [ -z "$LIB_PATH" ]; then
+    echo -e "${RED}Error: libnvidia-ml.so not found! Cannot build CGO modules.${NC}"
+    exit 1
+fi
+echo "  Found NVIDIA library at: $LIB_PATH"
 echo "  Building agent binary..."
 # Используем полный путь к Go и включаем CGO
 CGO_ENABLED=1 /usr/local/go/bin/go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent

@@ -3,7 +3,7 @@
 package attestation
 
 /*
-#cgo LDFLAGS: -lnvidia-ml
+#cgo LDFLAGS: -L/usr/lib/x86_64-linux-gnu -lnvidia-ml
 
 int get_gpu_count();
 int get_gpu_name(char *name, unsigned int length);
