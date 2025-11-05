@@ -250,3 +250,11 @@ func (o *Orchestrator) ListSSHKeys(ctx context.Context) ([]string, error) {
 
 	return keys, nil
 }
+
+func NewLite() (*Orchestrator, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create docker client: %w", err)
+	}
+	return &Orchestrator{dockerCli: cli}, nil
+}

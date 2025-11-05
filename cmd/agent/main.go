@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net"
 	"net/http"
@@ -43,7 +44,7 @@ func runWatchdogChild() {
 		log.Printf("FATAL [Watchdog Child]: Failed to create client: %v", err)
 		os.Exit(1)
 	}
-	orch, err := orchestrator.New()
+	orch, err := orchestrator.NewLite()
 	if err != nil {
 		log.Printf("FATAL [Watchdog Child]: Failed to create orchestrator: %v", err)
 		os.Exit(1)
@@ -112,13 +113,15 @@ func runMainAgent() {
 			GPUName:       hostReport.GPUName,
 			GPUAmount:     hostReport.GPUAmount,
 			VRAM:          hostReport.VRAM,
-			Fingerprint:   hostReport.Fingerprint,
+			Location:      types.Location{},
 			Configuration: hostReport.Configuration,
 		}
+
+		jsonData, _ := json.MarshalIndent(createHostReq, "", "  ")
+
 		if err := qClient.CreateHost(createHostReq); err != nil {
-			logger.Fatalf("FATAL: Failed to register host on server: %v", err)
+			logger.Fatalf("FATAL: Failed to register host on server: %v. Request body: %s", err, string(jsonData))
 		}
-		logger.Println("Host registered successfully.")
 	}
 
 	if agentResp.SecretKey != "" {
