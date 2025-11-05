@@ -3,7 +3,7 @@
 package attestation
 
 /*
-#cgo LDFLAGS: -L/usr/lib/x86_64-linux-gnu -lnvidia-ml
+#cgo LDFLAGS: -lnvidia-ml
 
 const char* getGpuName();
 */
