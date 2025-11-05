@@ -124,19 +124,21 @@ echo -e "${GREEN}✓ Kata Containers runtimes configured${NC}"
 
 # --- Шаг 5: Установка Go ---
 echo -e "${YELLOW}[5/8] Installing Go toolchain...${NC}"
+
 # Извлекаем требуемую версию из go.mod
 REQUIRED_GO_VERSION=$(grep -oP '^go\s+\K[0-9]+\.[0-9]+(\.[0-9]+)?' go.mod)
+
 if [ -z "$REQUIRED_GO_VERSION" ]; then
     echo -e "${RED}Error: Could not determine Go version from go.mod. Using default.${NC}"
-    REQUIRED_GO_VERSION="1.25.0" # Запасной вариант
+    REQUIRED_GO_VERSION="1.25.0"
 fi
-# Проверяем, установлена ли Go и какая у нее версия
+
 INSTALLED_GO_VERSION=""
 if [ -x "/usr/local/go/bin/go" ]; then
-    # Извлекаем номер версии из вывода "go version", например "1.22.3"
-    INSTALLED_GO_VERSION=$("/usr/local/go/bin/go" version | grep -oP 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/go//')
+    # Извлекаем номер версии из вывода "go version"
+    INSTALLED_GO_VERSION=$("/usr/local/go/bin/go" version 2>/dev/null | grep -oP 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/go//')
 fi
-# Сравниваем требуемую и установленную версии
+
 if [ "$INSTALLED_GO_VERSION" != "$REQUIRED_GO_VERSION" ]; then
     echo "  Go v${REQUIRED_GO_VERSION} not found or version mismatch (found v${INSTALLED_GO_VERSION:-none}). Installing..."
     # Формируем имя файла для скачивания
