@@ -47,22 +47,16 @@ echo -e "${GREEN}✓ Docker is running${NC}"
 
 # --- Шаг 3: Установка NVIDIA Driver & Toolkit ---
 echo -e "${YELLOW}[3/7] Installing NVIDIA components...${NC}"
-
-# Проверяем наличие GPU
 if ! lspci | grep -iq nvidia; then
     echo -e "${YELLOW}Warning: No NVIDIA GPU detected. Skipping driver and toolkit installation.${NC}"
-    # Устанавливаем только dev-библиотеку для CGO, если вдруг она понадобится без GPU
     apt-get install -y libnvidia-ml-dev > /dev/null 2>&1 || true
 else
     echo "  NVIDIA GPU detected."
-    # Проверяем, работает ли драйвер
     if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
         echo "  NVIDIA driver is already installed and working."
     else
         echo "  NVIDIA driver not found or not working. Attempting installation..."
-        # Устанавливаем заголовочные файлы ядра
         apt-get install -y linux-headers-$(uname -r) > /dev/null 2>&1
-        # Пытаемся установить драйверы
         ubuntu-drivers autoinstall
         echo -e "${YELLOW}NVIDIA driver installation initiated. A REBOOT IS REQUIRED to apply changes.${NC}"
         echo -e "${YELLOW}After reboot, please run this install script again.${NC}"
@@ -70,17 +64,12 @@ else
     fi
 
     echo "  Installing NVIDIA Container Toolkit..."
-    # Устанавливаем ключ репозитория NVIDIA
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
       && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-
     apt-get update -qq
-    # Устанавливаем сам toolkit и dev-библиотеку для CGO
     apt-get install -y --no-install-recommends nvidia-container-toolkit libnvidia-ml-dev 2>&1 | grep -v "^Reading\|^Building" || true
-
-    # Конфигурируем Docker для использования NVIDIA runtime
     nvidia-ctk runtime configure --runtime=docker
     systemctl restart docker
     echo -e "${GREEN}✓ NVIDIA components installed and configured${NC}"
@@ -93,93 +82,64 @@ if ! command -v kata-runtime &> /dev/null; then
     if [ "$ARCH" != "x86_64" ]; then
         echo -e "${RED}Unsupported architecture: $ARCH${NC}"; exit 1;
     fi
-
     KATA_PACKAGE="kata-static-${KATA_VERSION}-amd64.tar.xz"
     KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_PACKAGE}"
-
     echo "  Downloading Kata package..."
     curl -fLo "/tmp/$KATA_PACKAGE" "$KATA_URL"
-
     echo "  Extracting package to /opt/kata..."
     mkdir -p /opt/kata
     tar -xJf "/tmp/$KATA_PACKAGE" -C /opt/kata
     rm -f "/tmp/$KATA_PACKAGE"
-
     echo "  Creating symlink for kata-runtime..."
     ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
-
-    echo "  Creating Kata configuration files..."
-    mkdir -p /etc/kata-containers
-    cp "deploy/kata-configuration.toml" "/etc/kata-containers/configuration.toml"
-    cp "deploy/kata-configuration-cvm.toml" "/etc/kata-containers/configuration-cvm.toml"
-
-    echo "  Configuring Docker for NVIDIA, Kata, and Authz Plugin..."
-    mkdir -p /etc/docker
-
-    # Создаем базовый daemon.json, если его нет
-    if [ ! -f /etc/docker/daemon.json ]; then
-        echo '{}' > /etc/docker/daemon.json
+    if [ ! -f "/usr/local/bin/kata-runtime" ]; then
+        echo -e "${RED}Error: kata-runtime symlink was not created correctly!${NC}"; exit 1;
     fi
-
-    # Используем одну команду, которая последовательно применяет все изменения
-    TEMP_JSON=$(mktemp)
-    jq '
-        # Убеждаемся, что .runtimes существует и является объектом
-        .runtimes = (.runtimes // {}) |
-
-        # Добавляем/обновляем kata-qemu
-        .runtimes["kata-qemu"] = {
-            "path": "/usr/local/bin/kata-runtime",
-            "runtimeArgs": [
-                "--kata-config-path=/etc/kata-containers/configuration.toml"
-            ]
-        } |
-
-        # Добавляем/обновляем kata-cvm
-        .runtimes["kata-cvm"] = {
-            "path": "/usr/local/bin/kata-runtime",
-            "runtimeArgs": [
-                "--kata-config-path=/etc/kata-containers/configuration-cvm.toml"
-            ]
-        } |
-
-        # Добавляем/обновляем плагин авторизации
-        .["authorization-plugins"] = ["qudata-authz"]
-    ' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
-
-    mkdir -p /etc/docker/plugins
-    echo '{"Socket": "qudata-authz.sock"}' > /etc/docker/plugins/qudata-authz.json
-
-    systemctl restart docker
-    echo -e "${GREEN}✓ Docker daemon configured successfully${NC}"
-else
-    echo -e "${GREEN}✓ Kata Containers already installed${NC}"
 fi
+
+echo "  Creating Kata configuration files..."
+mkdir -p /etc/kata-containers
+cp "deploy/kata-configuration.toml" "/etc/kata-containers/configuration.toml"
+cp "deploy/kata-configuration-cvm.toml" "/etc/kata-containers/configuration-cvm.toml"
+
+echo "  Configuring Docker for Kata runtimes (without authz plugin initially)..."
+mkdir -p /etc/docker
+if [ ! -f /etc/docker/daemon.json ]; then
+    echo '{}' > /etc/docker/daemon.json
+fi
+TEMP_JSON=$(mktemp)
+jq '
+    .runtimes = (.runtimes // {}) |
+    .runtimes["kata-qemu"] = {
+        "path": "/usr/local/bin/kata-runtime",
+        "runtimeArgs": ["--kata-config-path=/etc/kata-containers/configuration.toml"]
+    } |
+    .runtimes["kata-cvm"] = {
+        "path": "/usr/local/bin/kata-runtime",
+        "runtimeArgs": ["--kata-config-path=/etc/kata-containers/configuration-cvm.toml"]
+    }
+' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+systemctl restart docker
+echo -e "${GREEN}✓ Kata Containers runtimes configured${NC}"
 
 # --- Шаг 5: Сборка и установка Go-агента ---
 echo -e "${YELLOW}[5/7] Building and installing QuData Agent...${NC}"
 if [ ! -f "go.mod" ]; then
     echo -e "${RED}Error: go.mod not found. Please run this script from the project root directory.${NC}"; exit 1;
 fi
-
 echo "  Building agent binary..."
-# Включаем CGO для сборки модулей аттестации
 CGO_ENABLED=1 go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent
 chmod +x /usr/local/bin/qudata-agent
-
 mkdir -p "$INSTALL_DIR"
 echo -e "${GREEN}✓ Agent binary installed to /usr/local/bin/qudata-agent${NC}"
 
 # --- Шаг 6: Настройка безопасности ---
 echo -e "${YELLOW}[6/7] Configuring security modules (Auditd, AppArmor)...${NC}"
-# Auditd
 tee "/etc/audit/rules.d/99-qudata.rules" > /dev/null <<EOF
 -w /usr/bin/virsh -p x -k qudata_exec_watch
 -w /usr/bin/qemu-img -p x -k qudata_exec_watch
 EOF
 augenrules --load || systemctl restart auditd
-
-# AppArmor
 PROFILE_PATH="/etc/apparmor.d/usr.local.bin.qudata-agent"
 cp "deploy/qudata-agent.profile" "$PROFILE_PATH"
 apparmor_parser -r "$PROFILE_PATH"
@@ -187,21 +147,27 @@ aa-enforce "qudata-agent" 2>/dev/null || true
 echo -e "${GREEN}✓ Security modules configured${NC}"
 
 # --- Шаг 7: Создание и запуск сервиса ---
-echo -e "${YELLOW}[7/7] Starting QuData Agent service...${NC}"
+echo -e "${YELLOW}[7/7] Starting QuData Agent service and activating Authz plugin...${NC}"
 cp "deploy/qudata-agent.service" /etc/systemd/system/qudata-agent.service
 sed -i "s/YOUR_API_KEY_PLACEHOLDER/$API_KEY/g" /etc/systemd/system/qudata-agent.service
-
 systemctl daemon-reload
 systemctl enable --now qudata-agent.service
 
-echo "  Waiting for agent to start..."
-sleep 3
+echo "  Waiting for agent to start and create authz socket..."
+sleep 5
 if ! systemctl is-active --quiet qudata-agent.service; then
     echo -e "${RED}Error: Agent service failed to start. Please check logs:${NC}"
     echo "  sudo journalctl -u qudata-agent -n 50"
     exit 1
 fi
-echo -e "${GREEN}✓ Agent is running successfully!${NC}"
+
+echo "  Activating Docker authorization plugin..."
+mkdir -p /etc/docker/plugins
+echo '{"Socket": "qudata-authz.sock"}' > /etc/docker/plugins/qudata-authz.json
+TEMP_JSON=$(mktemp)
+jq '.["authorization-plugins"] = ["qudata-authz"]' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+systemctl restart docker
+echo -e "${GREEN}✓ Agent is running and Authz plugin is active!${NC}"
 
 echo ""
 echo -e "${GREEN}Installation Completed!${NC}"
