@@ -11,11 +11,12 @@ import (
 )
 
 type Orchestrator interface {
-	CreateInstance(ctx context.Context, req agenttypes.CreateInstanceRequest) error
+	CreateInstance(ctx context.Context, req agenttypes.CreateInstanceRequest) (*agenttypes.InstanceState, error)
 	DeleteInstance(ctx context.Context) error
 	AddSSHKey(ctx context.Context, publicKey string) error
 	RemoveSSHKey(ctx context.Context, publicKey string) error
 	ListSSHKeys(ctx context.Context) ([]string, error)
+	ManageInstance(ctx context.Context, action agenttypes.InstanceAction) error
 }
 
 func NewServer(port int, orch Orchestrator) *http.Server {
@@ -28,15 +29,19 @@ func NewServer(port int, orch Orchestrator) *http.Server {
 
 	handlers := NewHandlers(orch)
 
+	r.Get("/ping", handlers.HandlePing)
+
 	r.Route("/ssh", func(r chi.Router) {
 		r.Get("/", handlers.HandleListSSHKeys)
 		r.Post("/", handlers.HandleAddSSHKey)
 		r.Delete("/", handlers.HandleRemoveSSHKey)
 	})
 
-	r.Get("/ping", handlers.HandlePing)
-	r.Post("/instances", handlers.HandleCreateInstance)
-	r.Delete("/instances", handlers.HandleDeleteInstance)
+	r.Route("/instances", func(r chi.Router) {
+		r.Post("/", handlers.HandleCreateInstance)
+		r.Delete("/", handlers.HandleDeleteInstance)
+		r.Put("/", handlers.HandleManageInstance)
+	})
 
 	return &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),

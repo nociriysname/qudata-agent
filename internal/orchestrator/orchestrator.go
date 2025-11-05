@@ -3,10 +3,12 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/google/uuid"
 
@@ -43,10 +45,10 @@ func New() (*Orchestrator, error) {
 	return &Orchestrator{dockerCli: cli}, nil
 }
 
-func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.CreateInstanceRequest) error {
+func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.CreateInstanceRequest) (*agenttypes.InstanceState, error) {
 	currentState := storage.GetState()
 	if currentState.Status != storage.StatusDestroyed {
-		return fmt.Errorf("an instance '%s' is already running", currentState.InstanceID)
+		return nil, fmt.Errorf("an instance '%s' is already running", currentState.InstanceID)
 	}
 
 	instanceID := uuid.New().String()
@@ -64,7 +66,7 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 	if req.GPUCount > 0 {
 		pciAddress, originalDriver, iommuPath, err := prepareGPUForPassthrough(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to prepare GPU for passthrough: %w", err)
+			return nil, fmt.Errorf("failed to prepare GPU for passthrough: %w", err)
 		}
 		newState.PciAddress = pciAddress
 		newState.OriginalDriver = originalDriver
@@ -76,7 +78,7 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
 		}
 		_ = deleteEncryptedVolume(context.Background(), newState)
-		return fmt.Errorf("failed to create encrypted volume: %w", err)
+		return nil, fmt.Errorf("failed to create encrypted volume: %w", err)
 	}
 
 	runtimeName := SelectRuntime(req.IsConfidential)
@@ -86,7 +88,7 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
 		}
 		_ = deleteEncryptedVolume(context.Background(), newState)
-		return fmt.Errorf("failed to run container: %w", err)
+		return nil, fmt.Errorf("failed to run container: %w", err)
 	}
 	newState.ContainerID = containerID
 
@@ -97,7 +99,7 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 		if newState.PciAddress != "" {
 			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
 		}
-		return fmt.Errorf("failed to get container IP for network isolation: %w", err)
+		return nil, fmt.Errorf("failed to get container IP for network isolation: %w", err)
 	}
 	if err := applyNetworkIsolation(ctx, containerIP); err != nil {
 		_ = removeContainer(context.Background(), o.dockerCli, containerID)
@@ -105,7 +107,7 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 		if newState.PciAddress != "" {
 			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
 		}
-		return fmt.Errorf("failed to apply network isolation: %w", err)
+		return nil, fmt.Errorf("failed to apply network isolation: %w", err)
 	}
 
 	newState.Status = "running"
@@ -115,10 +117,14 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 		if newState.PciAddress != "" {
 			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
 		}
-		return fmt.Errorf("CRITICAL: failed to save state after instance creation: %w", err)
+		return nil, fmt.Errorf("CRITICAL: failed to save state after instance creation: %w", err)
 	}
 
-	return nil
+	if req.SSHEnabled {
+		go setupSSHInContainer(o.dockerCli, newState.ContainerID)
+	}
+
+	return newState, nil
 }
 
 func (o *Orchestrator) DeleteInstance(ctx context.Context) error {
@@ -153,6 +159,55 @@ func (o *Orchestrator) DeleteInstance(ctx context.Context) error {
 	}
 
 	return storage.ClearState()
+}
+
+func (o *Orchestrator) ManageInstance(ctx context.Context, action agenttypes.InstanceAction) error {
+	currentState := storage.GetState()
+	if currentState.Status == storage.StatusDestroyed || currentState.ContainerID == "" {
+		return fmt.Errorf("no active instance to manage")
+	}
+
+	var err error
+	newStatus := currentState.Status
+
+	timeout := 10
+	stopOptions := container.StopOptions{Timeout: &timeout}
+
+	switch action {
+	case agenttypes.ActionStart:
+		if currentState.Status != "paused" {
+			return fmt.Errorf("instance is not stopped, current status: %s", currentState.Status)
+		}
+		err = o.dockerCli.ContainerStart(ctx, currentState.ContainerID, container.StartOptions{})
+		if err == nil {
+			newStatus = "running"
+		}
+	case agenttypes.ActionStop:
+		err = o.dockerCli.ContainerStop(ctx, currentState.ContainerID, stopOptions)
+		if err == nil {
+			newStatus = "paused"
+		}
+	case agenttypes.ActionRestart:
+		err = o.dockerCli.ContainerRestart(ctx, currentState.ContainerID, stopOptions)
+		if err == nil {
+			newStatus = "running"
+		}
+	default:
+		return fmt.Errorf("unknown instance action: %s", action)
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to perform action '%s': %w", action, err)
+	}
+
+	if newStatus != currentState.Status {
+		currentState.Status = newStatus
+		if err := storage.SaveState(&currentState); err != nil {
+			log.Printf("CRITICAL: failed to save state after action '%s': %v", action, err)
+		}
+	}
+
+	return nil
 }
 
 func (o *Orchestrator) AddSSHKey(ctx context.Context, publicKey string) error {

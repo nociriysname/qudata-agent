@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -27,18 +28,21 @@ func (h *Handlers) HandleCreateInstance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	go func() {
-		log.Printf("Starting to create instance for image %s:%s...", req.Image, req.ImageTag)
-		if err := h.orchestrator.CreateInstance(r.Context(), req); err != nil {
-			log.Printf("ERROR: Failed to create instance asynchronously: %v", err)
-		} else {
-			log.Println("Instance created successfully in background.")
-		}
-	}()
+	state, err := h.orchestrator.CreateInstance(r.Context(), req)
+	if err != nil {
+		log.Printf("ERROR: Failed to create instance: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"message": "Instance creation started"}`))
+	response := map[string]interface{}{
+		"instance_id": state.InstanceID,
+		"ports":       state.AllocatedPorts,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
 }
 
 func (h *Handlers) HandleDeleteInstance(w http.ResponseWriter, r *http.Request) {
@@ -112,4 +116,21 @@ func (h *Handlers) HandleListSSHKeys(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+}
+
+func (h *Handlers) HandleManageInstance(w http.ResponseWriter, r *http.Request) {
+	var req agenttypes.ManageInstanceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.orchestrator.ManageInstance(r.Context(), req.Action); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `{"message": "Action '%s' initiated successfully"}`, req.Action)
+	w.Header().Set("Content-Type", "application/json")
 }

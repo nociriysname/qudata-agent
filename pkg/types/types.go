@@ -47,3 +47,15 @@ type CreateHostRequest struct {
 	Fingerprint   string                        `json:"fingerprint"`
 	Configuration attestation.ConfigurationData `json:"configuration"`
 }
+
+type InstanceAction string
+
+const (
+	ActionStart   InstanceAction = "start"
+	ActionStop    InstanceAction = "stop"
+	ActionRestart InstanceAction = "restart"
+)
+
+type ManageInstanceRequest struct {
+	Action InstanceAction `json:"action"`
+}

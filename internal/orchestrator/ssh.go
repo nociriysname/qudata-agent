@@ -20,7 +20,7 @@ func addSSHKey(ctx context.Context, cli *client.Client, containerID, publicKey s
 	cmd := fmt.Sprintf("mkdir -p /root/.ssh && touch %s && grep -q -F '%s' %s || echo '%s' >> %s",
 		authorizedKeysPath, publicKey, authorizedKeysPath, publicKey, authorizedKeysPath)
 
-	return execInContainer(ctx, cli, containerID, []string{"sh", "-c", cmd})
+	return ExecInContainer(ctx, cli, containerID, []string{"sh", "-c", cmd})
 }
 
 func removeSSHKey(ctx context.Context, cli *client.Client, containerID, publicKey string) error {
@@ -31,7 +31,7 @@ func removeSSHKey(ctx context.Context, cli *client.Client, containerID, publicKe
 	escapedKey := strings.ReplaceAll(publicKey, "/", "\\/")
 	cmd := fmt.Sprintf("sed -i '/^%s$/d' %s", escapedKey, authorizedKeysPath)
 
-	return execInContainer(ctx, cli, containerID, []string{"sh", "-c", cmd})
+	return ExecInContainer(ctx, cli, containerID, []string{"sh", "-c", cmd})
 }
 
 func listSSHKeys(ctx context.Context, cli *client.Client, containerID string) (string, error) {
@@ -67,7 +67,7 @@ func listSSHKeys(ctx context.Context, cli *client.Client, containerID string) (s
 	return outBuf.String(), nil
 }
 
-func execInContainer(ctx context.Context, cli *client.Client, containerID string, cmd []string) error {
+func ExecInContainer(ctx context.Context, cli *client.Client, containerID string, cmd []string) error {
 	execConfig := types.ExecConfig{
 		Cmd:          cmd,
 		AttachStdout: true,
