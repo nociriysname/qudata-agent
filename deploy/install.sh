@@ -122,19 +122,37 @@ jq '
 systemctl restart docker
 echo -e "${GREEN}✓ Kata Containers runtimes configured${NC}"
 
-# --- Шаг 5: Сборка и установка Go-агента ---
-echo -e "${YELLOW}[5/7] Building and installing QuData Agent...${NC}"
+# --- Шаг 5: Установка Go ---
+echo -e "${YELLOW}[5/8] Installing Go toolchain...${NC}"
+GO_VERSION="1.22.3" # Актуальная стабильная версия
+# Проверяем, существует ли исполняемый файл Go по нашему пути
+if ! [ -x "/usr/local/go/bin/go" ]; then
+    echo "  Downloading Go v${GO_VERSION}..."
+    wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
+    # Удаляем старую версию, если она есть
+    rm -rf /usr/local/go
+    # Распаковываем в /usr/local
+    tar -C /usr/local -xzf /tmp/go.tar.gz
+    rm /tmp/go.tar.gz
+    echo -e "${GREEN}✓ Go toolchain installed${NC}"
+else
+    echo -e "${GREEN}✓ Go toolchain already installed${NC}"
+fi
+
+# --- Шаг 6: Сборка и установка Go-агента ---
+echo -e "${YELLOW}[6/8] Building and installing QuData Agent...${NC}"
 if [ ! -f "go.mod" ]; then
     echo -e "${RED}Error: go.mod not found. Please run this script from the project root directory.${NC}"; exit 1;
 fi
 echo "  Building agent binary..."
-CGO_ENABLED=1 go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent
+# Используем полный путь к Go и включаем CGO
+CGO_ENABLED=1 /usr/local/go/bin/go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent
 chmod +x /usr/local/bin/qudata-agent
 mkdir -p "$INSTALL_DIR"
 echo -e "${GREEN}✓ Agent binary installed to /usr/local/bin/qudata-agent${NC}"
 
-# --- Шаг 6: Настройка безопасности ---
-echo -e "${YELLOW}[6/7] Configuring security modules (Auditd, AppArmor)...${NC}"
+# --- Шаг 7: Настройка безопасности ---
+echo -e "${YELLOW}[7/8] Configuring security modules (Auditd, AppArmor)...${NC}"
 tee "/etc/audit/rules.d/99-qudata.rules" > /dev/null <<EOF
 -w /usr/bin/virsh -p x -k qudata_exec_watch
 -w /usr/bin/qemu-img -p x -k qudata_exec_watch
@@ -146,8 +164,8 @@ apparmor_parser -r "$PROFILE_PATH"
 aa-enforce "qudata-agent" 2>/dev/null || true
 echo -e "${GREEN}✓ Security modules configured${NC}"
 
-# --- Шаг 7: Создание и запуск сервиса ---
-echo -e "${YELLOW}[7/7] Starting QuData Agent service and activating Authz plugin...${NC}"
+# --- Шаг 8: Создание и запуск сервиса ---
+echo -e "${YELLOW}[8/8] Starting QuData Agent service and activating Authz plugin...${NC}"
 cp "deploy/qudata-agent.service" /etc/systemd/system/qudata-agent.service
 sed -i "s/YOUR_API_KEY_PLACEHOLDER/$API_KEY/g" /etc/systemd/system/qudata-agent.service
 systemctl daemon-reload
