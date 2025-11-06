@@ -28,16 +28,16 @@ INSTALL_DIR="/opt/qudata-agent"
 KATA_VERSION="3.2.0"
 
 # --- Шаг 1: Системные зависимости ---
-echo -e "${YELLOW}[1/7] Installing system dependencies...${NC}"
+echo -e "${YELLOW}[1/8] Installing system dependencies...${NC}"
 apt-get update -qq
 apt-get install -y --no-install-recommends \
     curl wget gnupg lsb-release \
     cryptsetup auditd apparmor-utils \
-    jq tar xz-utils ubuntu-drivers-common 2>&1 | grep -v "^Reading\|^Building" || true
+    jq tar xz-utils ubuntu-drivers-common build-essential 2>&1 | grep -v "^Reading\|^Building" || true
 echo -e "${GREEN}✓ System dependencies installed${NC}"
 
 # --- Шаг 2: Docker ---
-echo -e "${YELLOW}[2/7] Installing Docker...${NC}"
+echo -e "${YELLOW}[2/8] Installing Docker...${NC}"
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
     sh /tmp/get-docker.sh > /dev/null 2>&1
@@ -46,7 +46,7 @@ systemctl enable --now docker > /dev/null 2>&1
 echo -e "${GREEN}✓ Docker is running${NC}"
 
 # --- Шаг 3: Установка NVIDIA Driver & Toolkit ---
-echo -e "${YELLOW}[3/7] Installing NVIDIA components...${NC}"
+echo -e "${YELLOW}[3/8] Installing NVIDIA components...${NC}"
 if ! lspci | grep -iq nvidia; then
     echo -e "${YELLOW}Warning: No NVIDIA GPU detected. Skipping driver and toolkit installation.${NC}"
     apt-get install -y libnvidia-ml-dev > /dev/null 2>&1 || true
@@ -63,20 +63,28 @@ else
         exit 0
     fi
 
-    echo "  Installing NVIDIA Container Toolkit..."
+    echo "  Installing NVIDIA Container Toolkit and Dev Libraries..."
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
       && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
         tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
     apt-get update -qq
-    apt-get install -y --no-install-recommends nvidia-container-toolkit libnvidia-ml-dev 2>&1 | grep -v "^Reading\|^Building" || true
+
+    apt-get install -y -qq libnvidia-ml-dev || {
+        echo "  'libnvidia-ml-dev' not found, trying fallback packages..."
+        if command -v nvidia-smi >/dev/null 2>&1; then
+            apt-get install -y -qq nvidia-utils-* libnvidia-compute-* 2>/dev/null || true
+        fi
+    }
+
+    apt-get install -y --no-install-recommends nvidia-container-toolkit 2>&1 | grep -v "^Reading\|^Building" || true
     nvidia-ctk runtime configure --runtime=docker
     systemctl restart docker
     echo -e "${GREEN}✓ NVIDIA components installed and configured${NC}"
 fi
 
 # --- Шаг 4: Kata Containers ---
-echo -e "${YELLOW}[4/7] Installing and configuring Kata Containers v${KATA_VERSION}...${NC}"
+echo -e "${YELLOW}[4/8] Installing and configuring Kata Containers v${KATA_VERSION}...${NC}"
 if ! command -v kata-runtime &> /dev/null; then
     ARCH=$(uname -m)
     if [ "$ARCH" != "x86_64" ]; then
@@ -86,8 +94,7 @@ if ! command -v kata-runtime &> /dev/null; then
     KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_PACKAGE}"
     echo "  Downloading Kata package..."
     curl -fLo "/tmp/$KATA_PACKAGE" "$KATA_URL"
-    echo "  Extracting package to /"
-    mkdir -p /opt/kata
+    echo "  Extracting package to /..."
     tar -xJf "/tmp/$KATA_PACKAGE" -C /
     rm -f "/tmp/$KATA_PACKAGE"
     echo "  Creating symlink for kata-runtime..."
@@ -96,12 +103,10 @@ if ! command -v kata-runtime &> /dev/null; then
         echo -e "${RED}Error: kata-runtime symlink was not created correctly!${NC}"; exit 1;
     fi
 fi
-
 echo "  Creating Kata configuration files..."
 mkdir -p /etc/kata-containers
 cp "deploy/kata-configuration.toml" "/etc/kata-containers/configuration.toml"
 cp "deploy/kata-configuration-cvm.toml" "/etc/kata-containers/configuration-cvm.toml"
-
 echo "  Configuring Docker for Kata runtimes (without authz plugin initially)..."
 mkdir -p /etc/docker
 if [ ! -f /etc/docker/daemon.json ]; then
@@ -124,27 +129,19 @@ echo -e "${GREEN}✓ Kata Containers runtimes configured${NC}"
 
 # --- Шаг 5: Установка Go ---
 echo -e "${YELLOW}[5/8] Installing Go toolchain...${NC}"
-
-# Извлекаем требуемую версию из go.mod
 REQUIRED_GO_VERSION=$(grep -oP '^go\s+\K[0-9]+\.[0-9]+(\.[0-9]+)?' go.mod)
-
 if [ -z "$REQUIRED_GO_VERSION" ]; then
     echo -e "${RED}Error: Could not determine Go version from go.mod. Using default.${NC}"
     REQUIRED_GO_VERSION="1.25.0"
 fi
-
 INSTALLED_GO_VERSION=""
 if [ -x "/usr/local/go/bin/go" ]; then
-    # Извлекаем номер версии из вывода "go version"
     INSTALLED_GO_VERSION=$("/usr/local/go/bin/go" version 2>/dev/null | grep -oP 'go[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/go//')
 fi
-
 if [ "$INSTALLED_GO_VERSION" != "$REQUIRED_GO_VERSION" ]; then
     echo "  Go v${REQUIRED_GO_VERSION} not found or version mismatch (found v${INSTALLED_GO_VERSION:-none}). Installing..."
-    # Формируем имя файла для скачивания
     GO_TARBALL="go${REQUIRED_GO_VERSION}.linux-amd64.tar.gz"
     wget -q "https://go.dev/dl/${GO_TARBALL}" -O "/tmp/${GO_TARBALL}"
-    # Удаляем старую версию перед установкой новой
     rm -rf /usr/local/go
     tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
     rm "/tmp/${GO_TARBALL}"
@@ -162,15 +159,22 @@ echo "  Locating libnvidia-ml.so..."
 LIB_PATH=$(find /usr -name "libnvidia-ml.so.1" -printf "%h" -quit)
 if [ -z "$LIB_PATH" ]; then
     echo -e "${RED}Error: libnvidia-ml.so.1 not found! Cannot build CGO modules.${NC}"
-    echo -e "${RED}Please ensure NVIDIA drivers and libnvidia-ml-dev are correctly installed.${NC}"
+    echo -e "${RED}Please ensure NVIDIA drivers and dev packages are correctly installed.${NC}"
     exit 1
 fi
 echo "  Found NVIDIA library at: $LIB_PATH"
 echo "  Building agent binary..."
 export CGO_LDFLAGS="-L${LIB_PATH}"
-CGO_ENABLED=1 /usr/local/go/bin/go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent
+if ! CGO_ENABLED=1 /usr/local/go/bin/go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent; then
+    echo -e "${RED}ERROR: Failed to build qudata-agent with CGO${NC}"
+    echo "--- CGO Diagnostics ---"
+    dpkg -l | grep -E "nvidia-ml|nvidia-utils" || echo "No nvidia dev packages found."
+    ls -la /usr/include/nvml.h 2>/dev/null || echo "nvml.h not found."
+    ls -la "${LIB_PATH}/libnvidia-ml.so" 2>/dev/null || echo "libnvidia-ml.so not found in detected path."
+    echo "-----------------------"
+    exit 1
+fi
 unset CGO_LDFLAGS
-
 chmod +x /usr/local/bin/qudata-agent
 mkdir -p "$INSTALL_DIR"
 echo -e "${GREEN}✓ Agent binary installed to /usr/local/bin/qudata-agent${NC}"
