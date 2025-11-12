@@ -4,6 +4,8 @@ After=network.target docker.service auditd.service apparmor.service
 Requires=docker.service auditd.service apparmor.service
 
 [Service]
+Type=notify
+
 ExecStart=/usr/local/bin/qudata-agent
 
 User=root
@@ -12,10 +14,14 @@ WorkingDirectory=/opt/qudata-agent
 
 Restart=always
 RestartSec=5s
+
 WatchdogSec=30
-Type=notify
 
 Environment="QUDATA_API_KEY=YOUR_API_KEY_PLACEHOLDER"
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qudata-agent
 
 [Install]
 WantedBy=multi-user.target
