@@ -137,6 +137,9 @@ func runMainAgent() {
 		logger.Fatalf("FATAL: Failed to initialize orchestrator: %v", err)
 	}
 	logger.Println("Orchestrator initialized successfully.")
+	if err := orch.SyncState(context.Background()); err != nil {
+		logger.Fatalf("FATAL: Failed to sync state with Docker: %v", err)
+	}
 
 	secMon, err := security.NewSecurityMonitor(orch, qClient)
 	if err != nil {

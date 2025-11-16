@@ -258,3 +258,54 @@ func NewLite() (*Orchestrator, error) {
 	}
 	return &Orchestrator{dockerCli: cli}, nil
 }
+
+func (o *Orchestrator) SyncState(ctx context.Context) error {
+	currentState := storage.GetState()
+	if currentState.Status == storage.StatusDestroyed || currentState.ContainerID == "" {
+		return nil
+	}
+
+	log.Println("Syncing agent state with Docker...")
+
+	inspect, err := o.dockerCli.ContainerInspect(ctx, currentState.ContainerID)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+			log.Printf("SyncState: Container %s not found. Clearing state.", currentState.ContainerID[:12])
+			_ = o.DeleteInstance(ctx)
+			return storage.ClearState()
+		}
+		return fmt.Errorf("SyncState: failed to inspect container %s: %w", currentState.ContainerID, err)
+	}
+
+	dockerStatus := inspect.State.Status // "running", "exited", "paused", etc.
+	agentStatus := currentState.Status
+	needsSave := false
+
+	log.Printf("SyncState: Container status in Docker is '%s', agent state is '%s'.", dockerStatus, agentStatus)
+
+	switch dockerStatus {
+	case "running":
+		if agentStatus != "running" {
+			currentState.Status = "running"
+			needsSave = true
+		}
+	case "exited", "dead":
+		if agentStatus != "paused" {
+			currentState.Status = "paused"
+			needsSave = true
+		}
+	case "paused":
+		if agentStatus != "paused" {
+			currentState.Status = "paused"
+			needsSave = true
+		}
+	}
+
+	if needsSave {
+		log.Printf("SyncState: State mismatch detected. Updating agent state to '%s'.", currentState.Status)
+		return storage.SaveState(&currentState)
+	}
+
+	log.Println("SyncState: State is consistent.")
+	return nil
+}
