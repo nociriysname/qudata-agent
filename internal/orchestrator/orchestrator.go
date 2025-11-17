@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -308,4 +309,30 @@ func (o *Orchestrator) SyncState(ctx context.Context) error {
 
 	log.Println("SyncState: State is consistent.")
 	return nil
+}
+
+func (o *Orchestrator) GetInstanceLogs(ctx context.Context) (string, error) {
+	currentState := storage.GetState()
+	if currentState.Status == storage.StatusDestroyed || currentState.ContainerID == "" {
+		return "", fmt.Errorf("no active instance to get logs from")
+	}
+
+	logOptions := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "100",
+	}
+
+	reader, err := o.dockerCli.ContainerLogs(ctx, currentState.ContainerID, logOptions)
+	if err != nil {
+		return "", fmt.Errorf("failed to get container logs: %w", err)
+	}
+	defer reader.Close()
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(reader); err != nil {
+		return "", fmt.Errorf("failed to read logs from stream: %w", err)
+	}
+
+	return buf.String(), nil
 }

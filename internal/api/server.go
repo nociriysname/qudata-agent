@@ -17,6 +17,7 @@ type Orchestrator interface {
 	RemoveSSHKey(ctx context.Context, publicKey string) error
 	ListSSHKeys(ctx context.Context) ([]string, error)
 	ManageInstance(ctx context.Context, action agenttypes.InstanceAction) error
+	GetInstanceLogs(ctx context.Context) (string, error)
 }
 
 func NewServer(port int, orch Orchestrator) *http.Server {
@@ -41,6 +42,7 @@ func NewServer(port int, orch Orchestrator) *http.Server {
 		r.Post("/", handlers.HandleCreateInstance)
 		r.Delete("/", handlers.HandleDeleteInstance)
 		r.Put("/", handlers.HandleManageInstance)
+		r.Get("/logs", handlers.HandleGetInstanceLogs)
 	})
 
 	return &http.Server{

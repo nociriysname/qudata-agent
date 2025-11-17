@@ -134,3 +134,16 @@ func (h *Handlers) HandleManageInstance(w http.ResponseWriter, r *http.Request) 
 	fmt.Fprintf(w, `{"message": "Action '%s' initiated successfully"}`, req.Action)
 	w.Header().Set("Content-Type", "application/json")
 }
+
+// HandleGetInstanceLogs обрабатывает запрос на получение логов.
+func (h *Handlers) HandleGetInstanceLogs(w http.ResponseWriter, r *http.Request) {
+	logs, err := h.orchestrator.GetInstanceLogs(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(logs))
+}
