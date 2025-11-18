@@ -80,6 +80,15 @@ func (c *QudataClient) doRequest(method, path string, body any) (*http.Response,
 	return c.httpClient.Do(req)
 }
 
+// checkResponse проверяет статус и возвращает ошибку с ТЕКСТОМ ответа, если статус плохой
+func checkResponse(resp *http.Response) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(body))
+}
+
 func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentResponse, error) {
 	resp, err := c.doRequest("POST", "/init", req)
 	if err != nil {
@@ -87,8 +96,8 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned non-200 status for init: %d", resp.StatusCode)
+	if err := checkResponse(resp); err != nil {
+		return nil, fmt.Errorf("init failed: %w", err)
 	}
 
 	var agentResp types.AgentResponse
@@ -106,8 +115,8 @@ func (c *QudataClient) CreateHost(req types.CreateHostRequest) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned non-200 status for create host: %d", resp.StatusCode)
+	if err := checkResponse(resp); err != nil {
+		return fmt.Errorf("create host failed: %w", err)
 	}
 
 	return nil
@@ -130,10 +139,7 @@ func (c *QudataClient) ReportIncident(incidentType, reason string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned non-2xx status: %d", resp.StatusCode)
-	}
-	return nil
+	return checkResponse(resp)
 }
 
 func (c *QudataClient) SendStats(req types.StatsRequest) error {
@@ -143,10 +149,7 @@ func (c *QudataClient) SendStats(req types.StatsRequest) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned non-2xx status: %d", resp.StatusCode)
-	}
-	return nil
+	return checkResponse(resp)
 }
 
 func (c *QudataClient) NotifyInstanceReady(instanceID string) error {
@@ -157,8 +160,5 @@ func (c *QudataClient) NotifyInstanceReady(instanceID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned non-2xx status: %d", resp.StatusCode)
-	}
-	return nil
+	return checkResponse(resp)
 }
