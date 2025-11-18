@@ -93,12 +93,18 @@ if ! command -v kata-runtime &> /dev/null; then
     KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_PACKAGE}"
     echo "  Downloading Kata package..."
     curl -fLo "/tmp/$KATA_PACKAGE" "$KATA_URL"
-    echo "  Extracting package to /..."
-    tar -xJf "/tmp/$KATA_PACKAGE" -C /opt/kata --strip-components=2
+
+    echo "  Creating /opt/kata directory..."
+    mkdir -p /opt/kata
+
+    echo "  Extracting package to /opt/kata..."
+    tar -xJf "/tmp/$KATA_PACKAGE" -C /opt/kata --strip-components=1
+
     rm -f "/tmp/$KATA_PACKAGE"
     echo "  Creating symlink for kata-runtime..."
     ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
 fi
+echo "  Creating Kata configuration files..."
 echo "  Creating Kata configuration files..."
 mkdir -p /etc/kata-containers
 cp "deploy/kata-configuration.toml" "/etc/kata-containers/configuration.toml"
