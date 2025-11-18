@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	_ "log"
 	"net/http"
 	"time"
 
@@ -26,9 +26,11 @@ type QudataClient struct {
 }
 
 func NewClient(apiKey string) (*QudataClient, error) {
+	// Пытаемся загрузить существующий секрет для возможного re-init
 	secret, err := storage.LoadSecretKey()
 	if err != nil {
-		return nil, fmt.Errorf("could not load secret key: %w", err)
+		// Это нормально для первого запуска
+		log.Printf("Info: starting without loaded secret key (first run or reset)")
 	}
 
 	return &QudataClient{
@@ -39,8 +41,39 @@ func NewClient(apiKey string) (*QudataClient, error) {
 	}, nil
 }
 
+// UpdateSecret обновляет секретный ключ в памяти клиента.
+// Вызывается из main.go сразу после успешного InitAgent.
 func (c *QudataClient) UpdateSecret(key string) {
 	c.secretKey = key
+}
+
+// newRequest создает HTTP запрос с правильными заголовками в зависимости от типа запроса.
+func (c *QudataClient) newRequest(method, url string, body []byte, isInit bool) (*http.Request, error) {
+	var buf io.Reader
+	if body != nil {
+		buf = bytes.NewBuffer(body)
+	}
+
+	req, err := http.NewRequest(method, url, buf)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	if isInit {
+		req.Header.Set("X-Api-Key", c.apiKey)
+		if c.secretKey != "" {
+			req.Header.Set("X-Agent-Secret", c.secretKey)
+		}
+	} else {
+		if c.secretKey == "" {
+			return nil, fmt.Errorf("cannot perform non-init request: agent secret key is missing")
+		}
+		req.Header.Set("X-Agent-Secret", c.secretKey)
+	}
+
+	return req, nil
 }
 
 func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentResponse, error) {
@@ -50,15 +83,10 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 	}
 
 	url := fmt.Sprintf("%s/init", c.baseURL)
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	// isInit = true
+	httpReq, err := c.newRequest("POST", url, reqBody, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create http request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Api-Key", c.apiKey)
-	if c.secretKey != "" {
-		httpReq.Header.Set("X-Agent-Secret", c.secretKey)
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -67,8 +95,8 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("server returned non-2xx status: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned non-200 status for init: %d", resp.StatusCode)
 	}
 
 	var agentResp types.AgentResponse
@@ -86,15 +114,10 @@ func (c *QudataClient) CreateHost(req types.CreateHostRequest) error {
 	}
 
 	url := fmt.Sprintf("%s/init/host", c.baseURL)
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	// isInit = false (используем новый секрет)
+	httpReq, err := c.newRequest("POST", url, reqBody, false)
 	if err != nil {
 		return fmt.Errorf("failed to create http request for create host: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Api-Key", c.apiKey)
-	if c.secretKey != "" {
-		httpReq.Header.Set("X-Agent-Secret", c.secretKey)
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -103,8 +126,8 @@ func (c *QudataClient) CreateHost(req types.CreateHostRequest) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned non-2xx status for create host: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned non-200 status for create host: %d", resp.StatusCode)
 	}
 
 	return nil
@@ -127,15 +150,10 @@ func (c *QudataClient) ReportIncident(incidentType, reason string) error {
 	}
 
 	url := fmt.Sprintf("%s/incidents", c.baseURL)
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	// isInit = false
+	httpReq, err := c.newRequest("POST", url, reqBody, false)
 	if err != nil {
 		return fmt.Errorf("failed to create incident request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Api-Key", c.apiKey)
-	if c.secretKey != "" {
-		httpReq.Header.Set("X-Agent-Secret", c.secretKey)
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -158,15 +176,10 @@ func (c *QudataClient) SendStats(req types.StatsRequest) error {
 	}
 
 	url := fmt.Sprintf("%s/stats", c.baseURL)
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBody))
+	// isInit = false
+	httpReq, err := c.newRequest("POST", url, reqBody, false)
 	if err != nil {
 		return fmt.Errorf("failed to create stats request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Api-Key", c.apiKey)
-	if c.secretKey != "" {
-		httpReq.Header.Set("X-Agent-Secret", c.secretKey)
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
@@ -183,16 +196,11 @@ func (c *QudataClient) SendStats(req types.StatsRequest) error {
 }
 
 func (c *QudataClient) NotifyInstanceReady(instanceID string) error {
-	// API может ожидать POST-запрос без тела, важен сам факт вызова эндпоинта.
 	url := fmt.Sprintf("%s/instances/%s/ready", c.baseURL, instanceID)
-	httpReq, err := http.NewRequest("POST", url, nil)
+	// isInit = false, тело nil
+	httpReq, err := c.newRequest("POST", url, nil, false)
 	if err != nil {
 		return fmt.Errorf("failed to create instance ready request: %w", err)
-	}
-
-	httpReq.Header.Set("X-Api-Key", c.apiKey)
-	if c.secretKey != "" {
-		httpReq.Header.Set("X-Agent-Secret", c.secretKey)
 	}
 
 	resp, err := c.httpClient.Do(httpReq)
