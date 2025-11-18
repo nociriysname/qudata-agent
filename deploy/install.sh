@@ -143,10 +143,13 @@ tee "/etc/audit/rules.d/99-qudata.rules" > /dev/null <<EOF
 -w /usr/bin/qemu-img -p x -k qudata_exec_watch
 EOF
 augenrules --load || systemctl restart auditd
+
 PROFILE_PATH="/etc/apparmor.d/usr.local.bin.qudata-agent"
 cp "deploy/qudata-agent.profile" "$PROFILE_PATH"
 apparmor_parser -r "$PROFILE_PATH"
-aa-enforce "qudata-agent" 2>/dev/null || true
+
+echo "  Setting AppArmor profile to complain mode..."
+aa-complain "qudata-agent" 2>/dev/null || true
 
 # Запуск сервиса
 cp "deploy/qudata-agent.service" /etc/systemd/system/qudata-agent.service
