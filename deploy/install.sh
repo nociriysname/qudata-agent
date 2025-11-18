@@ -94,7 +94,7 @@ if ! command -v kata-runtime &> /dev/null; then
     echo "  Downloading Kata package..."
     curl -fLo "/tmp/$KATA_PACKAGE" "$KATA_URL"
     echo "  Extracting package to /..."
-    tar -xJf "/tmp/$KATA_PACKAGE" -C /
+    tar -xJf "/tmp/$KATA_PACKAGE" -C /opt/kata --strip-components=2
     rm -f "/tmp/$KATA_PACKAGE"
     echo "  Creating symlink for kata-runtime..."
     ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
@@ -141,6 +141,14 @@ fi
 
 # --- Шаг 7: Сборка и установка Go-агента ---
 echo -e "${YELLOW}[7/8] Building and installing QuData Agent...${NC}"
+TEMP_BUILD_DIR="/tmp/qudata-agent-build"
+if [ -d "$TEMP_BUILD_DIR" ]; then
+    cd "$TEMP_BUILD_DIR"
+    git pull -q
+else
+    git clone -q "https://github.com/nocirlysname/qudata-agent.git" "$TEMP_BUILD_DIR"
+    cd "$TEMP_BUILD_DIR"
+fi
 if [ ! -f "go.mod" ]; then
     echo -e "${RED}Error: go.mod not found. Please run this script from the project root directory.${NC}"; exit 1;
 fi
