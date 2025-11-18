@@ -51,7 +51,7 @@ type CreateHostRequest struct {
 	GPUAmount     int                           `json:"gpu_amount"`
 	VRAM          float64                       `json:"vram"`
 	Location      Location                      `json:"location"`
-	CUDAVersion   float64                       `json:"max_cuda_version"`
+	MaxCUDA       float64                       `json:"max_cuda"`
 	Configuration attestation.ConfigurationData `json:"configuration"`
 }
 
