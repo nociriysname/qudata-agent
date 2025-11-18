@@ -27,15 +27,21 @@ API_KEY="$1"
 INSTALL_DIR="/opt/qudata-agent"
 KATA_VERSION="3.2.0"
 
-# --- Шаг 1: Системные зависимости ---
-echo -e "${YELLOW}[1/7] Installing system dependencies...${NC}"
+# --- Шаг 1: Полное обновление системы и установка утилит ---
+echo -e "${YELLOW}[1/7] Updating system and installing dependencies...${NC}"
 export DEBIAN_FRONTEND=noninteractive
+
+# Обновляем списки пакетов и саму систему
 apt-get update -qq
+apt-get upgrade -y -qq
+
+# Ставим все необходимые утилиты (включая git, nano, curl)
 apt-get install -y --no-install-recommends \
     curl wget gnupg lsb-release build-essential git \
-    cryptsetup auditd apparmor-utils \
+    cryptsetup auditd apparmor-utils nano sudo ca-certificates \
     jq tar xz-utils ubuntu-drivers-common 2>&1 | grep -v "^Reading\|^Building" || true
-echo -e "${GREEN}✓ System dependencies installed${NC}"
+
+echo -e "${GREEN}✓ System updated and dependencies installed${NC}"
 
 # --- Шаг 2: Docker ---
 echo -e "${YELLOW}[2/7] Installing Docker...${NC}"
@@ -157,7 +163,7 @@ sed -i "s/YOUR_API_KEY_PLACEHOLDER/$API_KEY/g" /etc/systemd/system/qudata-agent.
 systemctl daemon-reload
 systemctl enable --now qudata-agent.service
 
-echo "  Waiting for agent to start and create authz socket..."
+echo "  Waiting for agent to start..."
 sleep 5
 if ! systemctl is-active --quiet qudata-agent.service; then
     echo -e "${RED}Error: Agent service failed to start. Please check logs:${NC}"
@@ -170,7 +176,11 @@ echo "  Activating Docker authorization plugin..."
 mkdir -p /etc/docker/plugins
 echo '{"Socket": "qudata-authz.sock"}' > /etc/docker/plugins/qudata-authz.json
 TEMP_JSON=$(mktemp)
-jq '.["authorization-plugins"] = ["qudata-authz"]' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+if ! jq -e '. | has("authorization-plugins")' /etc/docker/daemon.json > /dev/null; then
+    jq '.["authorization-plugins"] = ["qudata-authz"]' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+else
+    jq '.["authorization-plugins"] |= (. + ["qudata-authz"] | unique)' /etc/docker/daemon.json > "$TEMP_JSON" && mv "$TEMP_JSON" /etc/docker/daemon.json
+fi
 systemctl restart docker
 echo -e "${GREEN}✓ Agent is running and Authz plugin is active!${NC}"
 
