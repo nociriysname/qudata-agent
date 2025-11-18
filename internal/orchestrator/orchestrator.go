@@ -22,11 +22,16 @@ const (
 	mountDir   = "/var/lib/qudata/mounts"
 )
 
-type Orchestrator struct {
-	dockerCli *client.Client
+type QudataClient interface {
+	NotifyInstanceReady(instanceID string) error
 }
 
-func New() (*Orchestrator, error) {
+type Orchestrator struct {
+	dockerCli *client.Client
+	qudataCli QudataClient
+}
+
+func New(qClient QudataClient) (*Orchestrator, error) {
 	customHeaders := map[string]string{
 		"X-Qudata-Agent": "true",
 	}
@@ -47,7 +52,7 @@ func New() (*Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create mount dir: %w", err)
 	}
 
-	return &Orchestrator{dockerCli: cli}, nil
+	return &Orchestrator{dockerCli: cli, qudataCli: qClient}, nil
 }
 
 func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.CreateInstanceRequest) (*agenttypes.InstanceState, error) {
@@ -126,7 +131,7 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 	}
 
 	if req.SSHEnabled {
-		go setupSSHInContainer(o.dockerCli, newState.ContainerID)
+		go setupSSHInContainer(o.dockerCli, o.qudataCli, newState.ContainerID)
 	}
 
 	return newState, nil

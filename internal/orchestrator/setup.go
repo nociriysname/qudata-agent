@@ -9,7 +9,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
-func setupSSHInContainer(cli *client.Client, containerID string) {
+func setupSSHInContainer(cli *client.Client, qClient QudataClient, containerID string) {
 	log.Printf("Starting SSH setup in container %s...", containerID[:12])
 	time.Sleep(5 * time.Second)
 
@@ -38,6 +38,10 @@ func setupSSHInContainer(cli *client.Client, containerID string) {
 	}
 
 	log.Printf("SSH daemon started for container %s.", containerID[:12])
+
+	if err := qClient.NotifyInstanceReady(containerID); err != nil {
+		log.Printf("ERROR: Failed to notify server about instance readiness: %v", err)
+	}
 }
 
 func execInContainerDetached(ctx context.Context, cli *client.Client, containerID string, cmd []string) error {
