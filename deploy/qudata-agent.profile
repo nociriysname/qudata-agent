@@ -4,6 +4,9 @@ profile qudata-agent /usr/local/bin/qudata-agent {
   #include <abstractions/base>
   #include <abstractions/nameservice>
 
+  /proc/** r,
+  /sys/** r,
+
   # --- Доступ к файлам проекта в рабочей директории ---
   /opt/qudata-agent/state.json rw,
   /opt/qudata-agent/secret.json rw,
