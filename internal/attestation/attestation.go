@@ -2,19 +2,20 @@ package attestation
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"log"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 
-	"github.com/shirou/gopsutil/v3/host"
+	"github.com/nociriysname/qudata-agent/internal/utils"
+	_ "github.com/shirou/gopsutil/v3/host"
 )
 
-// --- Определения структур ---
+// --- 1. Определения структур ---
 
 type UnitValue struct {
 	Amount float64 `json:"amount"`
@@ -44,13 +45,15 @@ type HostReport struct {
 	CUDAVersion   float64
 }
 
-// --- Главная функция ---
+type GPUInfo struct {
+	Name    string
+	VRAM_GB float64
+}
+
+// --- 2. Главная "собирающая" функция ---
 
 func GenerateHostReport() *HostReport {
-	gpus, cudaVersion, err := GetGPUInfo()
-	if err != nil {
-		log.Printf("Warning: Failed to get GPU info via CGO: %v", err)
-	}
+	gpus, cudaVersion, _ := GetGPUInfo()
 
 	var gpuName string
 	var gpuAmount int
@@ -67,25 +70,61 @@ func GenerateHostReport() *HostReport {
 		GPUName:       gpuName,
 		GPUAmount:     gpuAmount,
 		VRAM:          vram,
-		Fingerprint:   getFingerprint(gpuName),
+		Fingerprint:   GetFingerprint(),
 		CUDAVersion:   cudaVersion,
 		Configuration: config,
 	}
 }
 
-// --- Вспомогательные функции (адаптированы из кода Алекса) ---
+// --- 3. Реализация всех вспомогательных функций ---
+
+func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
+	countOutput, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=count", "--format=csv,noheader")
+	if err != nil {
+		return nil, 0, nil
+	}
+	count, _ := strconv.Atoi(strings.TrimSpace(countOutput))
+	if count == 0 {
+		return nil, 0, nil
+	}
+	for i := 0; i < count; i++ {
+		index := strconv.Itoa(i)
+		var gpu GPUInfo
+		nameOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader", "-i", index)
+		gpu.Name = strings.TrimSpace(nameOutput)
+		vramOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits", "-i", index)
+		vramMiB, _ := strconv.ParseFloat(strings.TrimSpace(vramOutput), 64)
+		gpu.VRAM_GB = vramMiB / 1024
+		gpus = append(gpus, gpu)
+	}
+	cudaOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-driver=cuda_version", "--format=csv,noheader")
+	cudaVersion, _ = strconv.ParseFloat(strings.TrimSpace(cudaOutput), 64)
+	return gpus, cudaVersion, nil
+}
+
+func GetFingerprint() string {
+	var parts []string
+	if b, err := os.ReadFile("/etc/machine-id"); err == nil {
+		parts = append(parts, strings.TrimSpace(string(b)))
+	}
+	serial, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=serial", "--format=csv,noheader", "-i", "0")
+	if err == nil && strings.TrimSpace(serial) != "[N/A]" {
+		parts = append(parts, strings.TrimSpace(serial))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])
+}
 
 func getConfiguration(cudaVersion float64) ConfigurationData {
 	ram := getRAM()
 	cpuCores := getCPUCores()
 	cpuFreq := getCPUFreq()
 	netSpeed := getNetworkSpeed()
-
 	config := ConfigurationData{
 		RAM:            ram,
 		Disk:           getDisk(),
 		CPUName:        getCPUName(),
-		VCPU:           cpuCores, // Упрощение, vCPU = CPUCores
+		VCPU:           cpuCores,
 		CPUCores:       cpuCores,
 		CPUFreq:        cpuFreq,
 		MemorySpeed:    getMemorySpeed(),
@@ -97,23 +136,7 @@ func getConfiguration(cudaVersion float64) ConfigurationData {
 	return config
 }
 
-func getFingerprint(gpuName string) string {
-	info, err := host.Info()
-	if err != nil {
-		log.Printf("Warning: could not get host info for fingerprint: %v", err)
-		return ""
-	}
-	var parts []string
-	parts = append(parts, info.HostID)
-	if gpuName != "" {
-		parts = append(parts, gpuName)
-	}
-	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
-	return hex.EncodeToString(sum[:])
-}
-
 func getRAM() UnitValue {
-	// Реализация Алекса через /proc/meminfo
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return UnitValue{Amount: 0, Unit: "gb"}
@@ -126,8 +149,7 @@ func getRAM() UnitValue {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
 				kb, _ := strconv.ParseFloat(fields[1], 64)
-				gb := kb / 1024 / 1024
-				return UnitValue{Amount: gb, Unit: "gb"}
+				return UnitValue{Amount: kb / 1024 / 1024, Unit: "gb"}
 			}
 		}
 	}
@@ -140,12 +162,10 @@ func getDisk() UnitValue {
 		return UnitValue{Amount: 0, Unit: "gb"}
 	}
 	totalBytes := stat.Blocks * uint64(stat.Bsize)
-	gb := float64(totalBytes) / (1024 * 1024 * 1024)
-	return UnitValue{Amount: gb, Unit: "gb"}
+	return UnitValue{Amount: float64(totalBytes) / (1024 * 1024 * 1024), Unit: "gb"}
 }
 
 func getCPUName() string {
-	// Реализация Алекса
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
 		return ""
@@ -169,7 +189,6 @@ func getCPUCores() int {
 }
 
 func getCPUFreq() float64 {
-	// Улучшенная реализация Алекса (поиск максимальной частоты)
 	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
 		return 0.0
@@ -196,12 +215,10 @@ func getCPUFreq() float64 {
 }
 
 func getMemorySpeed() float64 {
-	// Заглушка, как у Алекса
 	return 2400.0
 }
 
 func getNetworkSpeed() float64 {
-	// Улучшенная реализация Алекса (поиск самого быстрого физического интерфейса)
 	entries, err := os.ReadDir("/sys/class/net")
 	if err != nil {
 		return 1.0
@@ -209,17 +226,14 @@ func getNetworkSpeed() float64 {
 	var maxSpeed float64
 	for _, entry := range entries {
 		ifaceName := entry.Name()
-		// Пропускаем виртуальные и loopback интерфейсы
 		if ifaceName == "lo" || strings.HasPrefix(ifaceName, "docker") || strings.HasPrefix(ifaceName, "veth") {
 			continue
 		}
-		// Проверяем, что интерфейс "up"
 		operstatePath := "/sys/class/net/" + ifaceName + "/operstate"
 		operstate, err := os.ReadFile(operstatePath)
 		if err != nil || strings.TrimSpace(string(operstate)) != "up" {
 			continue
 		}
-		// Читаем скорость
 		speedPath := "/sys/class/net/" + ifaceName + "/speed"
 		data, err := os.ReadFile(speedPath)
 		if err != nil {
@@ -231,7 +245,7 @@ func getNetworkSpeed() float64 {
 		}
 	}
 	if maxSpeed > 0 {
-		return maxSpeed / 1000 // в Gbps
+		return maxSpeed / 1000
 	}
-	return 1.0 // Default
+	return 1.0
 }
