@@ -1,23 +1,22 @@
 package storage
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
-const secretFilePath = "secret.json"
+const secretFilePath = "/run/lib/qudata-agent/secret"
 
-type secretData struct {
-	SecretKey string `json:"secret_key"`
+func init() {
+	_ = os.MkdirAll(filepath.Dir(secretFilePath), 0755)
 }
 
 func SaveSecretKey(key string) error {
-	data, err := json.Marshal(secretData{SecretKey: key})
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(secretFilePath), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(secretFilePath, data, 0600)
+	return os.WriteFile(secretFilePath, []byte(key), 0600)
 }
 
 func LoadSecretKey() (string, error) {
@@ -30,19 +29,13 @@ func LoadSecretKey() (string, error) {
 		return "", err
 	}
 
-	var s secretData
-	if err := json.Unmarshal(data, &s); err != nil {
-		return "", err
-	}
-
-	return s.SecretKey, nil
+	return strings.TrimSpace(string(data)), nil
 }
 
 func ShredSecretFile() error {
 	if _, err := os.Stat(secretFilePath); os.IsNotExist(err) {
 		return nil
 	}
-
-	cmd := exec.Command("shred", "-n", "1", "-z", "-u", secretFilePath)
-	return cmd.Run()
+	_ = os.WriteFile(secretFilePath, []byte("0000000000000000"), 0600)
+	return os.Remove(secretFilePath)
 }
