@@ -19,6 +19,7 @@ import (
 	"github.com/nociriysname/qudata-agent/internal/client"
 	"github.com/nociriysname/qudata-agent/internal/orchestrator"
 	"github.com/nociriysname/qudata-agent/internal/security"
+	"github.com/nociriysname/qudata-agent/internal/stats"
 	"github.com/nociriysname/qudata-agent/internal/storage"
 	"github.com/nociriysname/qudata-agent/pkg/types"
 )
@@ -91,6 +92,9 @@ func runMainAgent() {
 
 	logger.Println("Generating host hardware report...")
 	hostReport := attestation.GenerateHostReport()
+	if hostReport == nil {
+		logger.Fatalf("FATAL: Could not generate host hardware report.")
+	}
 
 	initReq := types.InitAgentRequest{
 		AgentID:     uuid.NewString(),
@@ -109,11 +113,13 @@ func runMainAgent() {
 
 	if !agentResp.HostExists {
 		logger.Println("Host not found on server. Registering new host...")
+
 		createHostReq := types.CreateHostRequest{
 			GPUName:       hostReport.GPUName,
 			GPUAmount:     hostReport.GPUAmount,
 			VRAM:          hostReport.VRAM,
 			Location:      types.Location{},
+			CUDAVersion:   hostReport.CUDAVersion,
 			Configuration: hostReport.Configuration,
 		}
 
@@ -122,6 +128,7 @@ func runMainAgent() {
 		if err := qClient.CreateHost(createHostReq); err != nil {
 			logger.Fatalf("FATAL: Failed to register host on server: %v. Request body: %s", err, string(jsonData))
 		}
+		logger.Println("Host registered successfully.")
 	}
 
 	if agentResp.SecretKey != "" {
@@ -132,11 +139,12 @@ func runMainAgent() {
 		logger.Println("New secret key saved and activated.")
 	}
 
-	orch, err := orchestrator.New()
+	orch, err := orchestrator.New(qClient)
 	if err != nil {
 		logger.Fatalf("FATAL: Failed to initialize orchestrator: %v", err)
 	}
 	logger.Println("Orchestrator initialized successfully.")
+
 	if err := orch.SyncState(context.Background()); err != nil {
 		logger.Fatalf("FATAL: Failed to sync state with Docker: %v", err)
 	}
@@ -155,6 +163,27 @@ func runMainAgent() {
 		logger.Println("API server is starting to listen...")
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("FATAL: Could not start API server: %v", err)
+		}
+	}()
+
+	go func() {
+		statsCollector := stats.NewCollector()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			currentState := storage.GetState()
+			statsReq := types.StatsRequest{
+				CPUUtil: statsCollector.GetCPUUtil(),
+				RAMUtil: statsCollector.GetRAMUtil(),
+				GPUUtil: statsCollector.GetGPUUtil(),
+				MemUtil: statsCollector.GetGPUMemoryUtil(),
+				Status:  currentState.Status,
+			}
+			if err := qClient.SendStats(statsReq); err != nil {
+				logger.Printf("Warning: failed to send stats: %v", err)
+			} else {
+				logger.Println("Stats sent successfully.")
+			}
 		}
 	}()
 
