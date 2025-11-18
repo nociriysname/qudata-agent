@@ -152,7 +152,7 @@ if [ -d "$TEMP_BUILD_DIR" ]; then
     cd "$TEMP_BUILD_DIR"
     git pull -q
 else
-    git clone -q "https://github.com/nocirlysname/qudata-agent.git" "$TEMP_BUILD_DIR"
+    git clone -q "https://github.com/nociriysname/qudata-agent.git" "$TEMP_BUILD_DIR"
     cd "$TEMP_BUILD_DIR"
 fi
 if [ ! -f "go.mod" ]; then
