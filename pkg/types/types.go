@@ -51,6 +51,7 @@ type CreateHostRequest struct {
 	GPUAmount     int                           `json:"gpu_amount"`
 	VRAM          float64                       `json:"vram"`
 	Location      Location                      `json:"location"`
+	CUDAVersion   float64                       `json:"max_cuda_version"`
 	Configuration attestation.ConfigurationData `json:"configuration"`
 }
 
@@ -64,4 +65,14 @@ const (
 
 type ManageInstanceRequest struct {
 	Action InstanceAction `json:"action"`
+}
+
+type StatsRequest struct {
+	GPUUtil float64 `json:"gpu_util"`
+	CPUUtil float64 `json:"cpu_util"`
+	RAMUtil float64 `json:"ram_util"`
+	MemUtil float64 `json:"mem_util"`
+	InetIn  int     `json:"inet_in"`
+	InetOut int     `json:"inet_out"`
+	Status  string  `json:"status"`
 }
