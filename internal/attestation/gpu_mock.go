@@ -1,23 +1,12 @@
-//go:build !linux || !cgo
+//go:build !linux
 
 package attestation
 
-import "fmt"
-
-func GetGPUCount() int {
-	fmt.Println("[Mock] GPU count unavailable")
-	return 0
+type GPUInfo struct {
+	Name    string
+	VRAM_GB float64
 }
 
-func GetGPUName() string {
-	fmt.Println("[Mock] GPU (no NVML)")
-	return ""
-}
-
-func GetVRAM() float64 {
-	return 0.0
-}
-
-func GetMaxCUDAVersion() float64 {
-	return 0.0
+func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
+	return nil, 0.0, nil
 }

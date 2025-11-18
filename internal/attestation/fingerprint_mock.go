@@ -1,6 +1,6 @@
 //go:build !linux || !cgo
 
-package attestation
+package utils
 
 import (
 	"crypto/sha256"

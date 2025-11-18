@@ -5,7 +5,7 @@ package attestation
 /*
 #cgo LDFLAGS: -lnvidia-ml
 
-const char* getGpuName();
+const char* getGpuSerial();
 */
 import "C"
 
@@ -23,8 +23,8 @@ func GetFingerprint() string {
 		parts = append(parts, strings.TrimSpace(string(b)))
 	}
 
-	if name := C.getGpuName(); name != nil {
-		parts = append(parts, C.GoString(name))
+	if serial := C.getGpuSerial(); serial != nil {
+		parts = append(parts, C.GoString(serial))
 	}
 
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))

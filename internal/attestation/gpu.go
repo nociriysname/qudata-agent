@@ -4,38 +4,34 @@ package attestation
 
 /*
 #cgo LDFLAGS: -lnvidia-ml
-
-int get_gpu_count();
-int get_gpu_name(char *name, unsigned int length);
-double get_gpu_vram();
-double get_max_cuda_version();
+#include "gpu_linux.c"
 */
 import "C"
 
-func GetGPUCount() int {
-	return int(C.get_gpu_count())
+type GPUInfo struct {
+	Name    string
+	VRAM_GB float64
 }
 
-func GetGPUName() string {
-	var name [128]C.char
-	if C.get_gpu_name(&name[0], C.uint(len(name))) == 0 {
-		return ""
+func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
+	count := int(C.get_gpu_count())
+	if count <= 0 {
+		return nil, 0, nil
 	}
-	return C.GoString(&name[0])
-}
 
-func GetVRAM() float64 {
-	vram := C.get_gpu_vram()
-	if vram < 0 {
-		return 0.0
-	}
-	return float64(vram)
-}
+	for i := 0; i < count; i++ {
+		var name [128]C.char
+		var vram C.ulonglong
+		var cudaVer C.double
 
-func GetMaxCUDAVersion() float64 {
-	version := C.get_max_cuda_version()
-	if version <= 0 {
-		return 0.0
+		result := C.get_gpu_info_by_index(C.uint(i), &name[0], C.uint(len(name)), &vram, &cudaVer)
+		if result == 1 {
+			gpus = append(gpus, GPUInfo{
+				Name:    C.GoString(&name[0]),
+				VRAM_GB: float64(vram) / (1024 * 1024 * 1024),
+			})
+			cudaVersion = float64(cudaVer)
+		}
 	}
-	return float64(version)
+	return gpus, cudaVersion, nil
 }

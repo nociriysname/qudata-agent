@@ -1,88 +1,41 @@
-#include <stdio.h>
-#include <stdlib.h>
 #include <nvml.h>
-
+#include <stdlib.h>
 
 int get_gpu_count() {
-    nvmlReturn_t result;
+    if (nvmlInit_v2() != NVML_SUCCESS) return -1;
     unsigned int count = 0;
-
-    result = nvmlInit_v2();
-    if (result != NVML_SUCCESS)
-        return -1;
-
-    result = nvmlDeviceGetCount_v2(&count);
+    nvmlReturn_t result = nvmlDeviceGetCount_v2(&count);
     nvmlShutdown();
-
-    if (result != NVML_SUCCESS)
-        return -1;
+    if (result != NVML_SUCCESS) return -1;
     return (int)count;
 }
 
-int get_gpu_name(char *name, unsigned int length) {
-    nvmlReturn_t result;
+int get_gpu_info_by_index(unsigned int index, char *name, unsigned int name_len, unsigned long long *vram, double *cuda_ver) {
+    if (nvmlInit_v2() != NVML_SUCCESS) return 0;
+
     nvmlDevice_t device;
-
-    result = nvmlInit_v2();
-    if (result != NVML_SUCCESS)
-        return 0;
-
-    result = nvmlDeviceGetHandleByIndex_v2(0, &device);
-    if (result != NVML_SUCCESS) {
+    if (nvmlDeviceGetHandleByIndex_v2(index, &device) != NVML_SUCCESS) {
         nvmlShutdown();
         return 0;
     }
 
-    result = nvmlDeviceGetName(device, name, length);
-    nvmlShutdown();
+    if (nvmlDeviceGetName(device, name, name_len) != NVML_SUCCESS) {
+        nvmlShutdown();
+        return 0;
+    }
 
-    return (result == NVML_SUCCESS);
-}
-
-double get_gpu_vram() {
-    nvmlReturn_t result;
-    nvmlDevice_t device;
     nvmlMemory_t memory;
-
-    result = nvmlInit_v2();
-    if (result != NVML_SUCCESS)
-        return -1.0;
-
-    result = nvmlDeviceGetHandleByIndex_v2(0, &device);
-    if (result != NVML_SUCCESS) {
+    if (nvmlDeviceGetMemoryInfo(device, &memory) != NVML_SUCCESS) {
         nvmlShutdown();
-        return -1.0;
+        return 0;
+    }
+    *vram = memory.total;
+
+    int driver_version = 0;
+    if (nvmlSystemGetCudaDriverVersion(&driver_version) == NVML_SUCCESS) {
+        *cuda_ver = (double)(driver_version / 1000) + (double)((driver_version % 1000) / 10) / 10.0;
     }
 
-    result = nvmlDeviceGetMemoryInfo(device, &memory);
     nvmlShutdown();
-
-    if (result != NVML_SUCCESS)
-        return -1.0;
-
-    return (double)memory.total / (1024.0 * 1024.0 * 1024.0);
-}
-
-double get_max_cuda_version() {
-    nvmlReturn_t result;
-    nvmlDevice_t device;
-    int cudaMajor = 0, cudaMinor = 0;
-
-    result = nvmlInit_v2();
-    if (result != NVML_SUCCESS)
-        return 0.0;
-
-    result = nvmlDeviceGetHandleByIndex_v2(0, &device);
-    if (result != NVML_SUCCESS) {
-        nvmlShutdown();
-        return 0.0;
-    }
-
-    result = nvmlDeviceGetCudaComputeCapability(device, &cudaMajor, &cudaMinor);
-    nvmlShutdown();
-
-    if (result != NVML_SUCCESS)
-        return 0.0;
-
-    return (double)cudaMajor + ((double)cudaMinor / 10.0);
+    return 1;
 }
