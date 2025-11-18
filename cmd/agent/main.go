@@ -111,6 +111,14 @@ func runMainAgent() {
 	}
 	logger.Printf("Agent initialized successfully. Host exists: %v", agentResp.HostExists)
 
+	if agentResp.SecretKey != "" {
+		if err := storage.SaveSecretKey(agentResp.SecretKey); err != nil {
+			logger.Fatalf("FATAL: Failed to save new secret key: %v", err)
+		}
+		qClient.UpdateSecret(agentResp.SecretKey)
+		logger.Println("New secret key saved and activated.")
+	}
+
 	if !agentResp.HostExists {
 		logger.Println("Host not found on server. Registering new host...")
 
@@ -129,14 +137,6 @@ func runMainAgent() {
 			logger.Fatalf("FATAL: Failed to register host on server: %v. Request body: %s", err, string(jsonData))
 		}
 		logger.Println("Host registered successfully.")
-	}
-
-	if agentResp.SecretKey != "" {
-		if err := storage.SaveSecretKey(agentResp.SecretKey); err != nil {
-			logger.Fatalf("FATAL: Failed to save new secret key: %v", err)
-		}
-		qClient.UpdateSecret(agentResp.SecretKey)
-		logger.Println("New secret key saved and activated.")
 	}
 
 	orch, err := orchestrator.New(qClient)
