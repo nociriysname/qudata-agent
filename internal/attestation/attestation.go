@@ -16,8 +16,6 @@ import (
 	_ "github.com/shirou/gopsutil/v3/host"
 )
 
-// --- 1. Определения структур ---
-
 type UnitValue struct {
 	Amount float64 `json:"amount"`
 	Unit   string  `json:"unit"`
@@ -27,7 +25,6 @@ type ConfigurationData struct {
 	RAM            UnitValue `json:"ram,omitempty"`
 	Disk           UnitValue `json:"disk,omitempty"`
 	CPUName        string    `json:"cpu_name,omitempty"`
-	VCPU           int       `json:"vcpu,omitempty"`
 	CPUCores       int       `json:"cpu_cores,omitempty"`
 	CPUFreq        float64   `json:"cpu_freq,omitempty"`
 	MemorySpeed    float64   `json:"memory_speed,omitempty"`
@@ -50,8 +47,6 @@ type GPUInfo struct {
 	Name    string
 	VRAM_GB float64
 }
-
-// --- 2. Главная "собирающая" функция ---
 
 func GenerateHostReport() *HostReport {
 	gpus, cudaVersion, _ := GetGPUInfo()
@@ -89,7 +84,6 @@ func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
 		return nil, 0, nil
 	}
 
-	// Получаем информацию по каждой карте
 	for i := 0; i < count; i++ {
 		index := strconv.Itoa(i)
 		var gpu GPUInfo
@@ -142,7 +136,6 @@ func getConfiguration(cudaVersion float64) ConfigurationData {
 		RAM:            ram,
 		Disk:           getDisk(),
 		CPUName:        getCPUName(),
-		VCPU:           cpuCores,
 		CPUCores:       cpuCores,
 		CPUFreq:        cpuFreq,
 		MemorySpeed:    getMemorySpeed(),

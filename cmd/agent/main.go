@@ -126,6 +126,7 @@ func runMainAgent() {
 			GPUName:       hostReport.GPUName,
 			GPUAmount:     hostReport.GPUAmount,
 			VRAM:          hostReport.VRAM,
+			Location:      types.Location{},
 			MaxCUDA:       hostReport.CUDAVersion,
 			Configuration: hostReport.Configuration,
 		}
