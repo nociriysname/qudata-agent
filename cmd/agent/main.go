@@ -132,9 +132,10 @@ func runMainAgent() {
 		}
 
 		jsonData, _ := json.MarshalIndent(createHostReq, "", "  ")
+		logger.Printf("Sending CreateHost request: %s", string(jsonData))
 
 		if err := qClient.CreateHost(createHostReq); err != nil {
-			logger.Fatalf("FATAL: Failed to register host on server: %v. Request body: %s", err, string(jsonData))
+			logger.Fatalf("FATAL: Failed to register host on server: %v", err)
 		}
 		logger.Println("Host registered successfully.")
 	}

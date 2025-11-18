@@ -26,34 +26,43 @@ type QudataClient struct {
 }
 
 func NewClient(apiKey string) (*QudataClient, error) {
-	// Пытаемся загрузить существующий секрет для возможного re-init
 	secret, err := storage.LoadSecretKey()
 	if err != nil {
-		// Это нормально для первого запуска
-		log.Printf("Info: starting without loaded secret key (first run or reset)")
+		log.Printf("Info: starting without loaded secret key")
 	}
 
-	return &QudataClient{
+	client := &QudataClient{
 		httpClient: &http.Client{Timeout: requestTimeout},
 		baseURL:    qudataAPIBaseURL,
 		apiKey:     apiKey,
 		secretKey:  secret,
-	}, nil
-}
-
-// UpdateSecret обновляет секретный ключ в памяти клиента.
-// Вызывается из main.go сразу после успешного InitAgent.
-func (c *QudataClient) UpdateSecret(key string) {
-	c.secretKey = key
-}
-
-// newRequest создает HTTP запрос с правильными заголовками в зависимости от типа запроса.
-func (c *QudataClient) newRequest(method, url string, body []byte, isInit bool) (*http.Request, error) {
-	var buf io.Reader
-	if body != nil {
-		buf = bytes.NewBuffer(body)
 	}
 
+	if secret != "" {
+		client.apiKey = ""
+	}
+
+	return client, nil
+}
+
+func (c *QudataClient) UpdateSecret(key string) {
+	if key != "" {
+		c.secretKey = key
+		c.apiKey = ""
+	}
+}
+
+func (c *QudataClient) doRequest(method, path string, body any) (*http.Response, error) {
+	var buf io.Reader
+	if body != nil {
+		jsonData, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		buf = bytes.NewBuffer(jsonData)
+	}
+
+	url := fmt.Sprintf("%s%s", c.baseURL, path)
 	req, err := http.NewRequest(method, url, buf)
 	if err != nil {
 		return nil, err
@@ -61,35 +70,18 @@ func (c *QudataClient) newRequest(method, url string, body []byte, isInit bool) 
 
 	req.Header.Set("Content-Type", "application/json")
 
-	if isInit {
+	if c.apiKey != "" {
 		req.Header.Set("X-Api-Key", c.apiKey)
-		if c.secretKey != "" {
-			req.Header.Set("X-Agent-Secret", c.secretKey)
-		}
-	} else {
-		if c.secretKey == "" {
-			return nil, fmt.Errorf("cannot perform non-init request: agent secret key is missing")
-		}
+	}
+	if c.secretKey != "" {
 		req.Header.Set("X-Agent-Secret", c.secretKey)
 	}
 
-	return req, nil
+	return c.httpClient.Do(req)
 }
 
 func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentResponse, error) {
-	reqBody, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal init request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/init", c.baseURL)
-	// isInit = true
-	httpReq, err := c.newRequest("POST", url, reqBody, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create http request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.doRequest("POST", "/init", req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send init request: %w", err)
 	}
@@ -108,19 +100,7 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 }
 
 func (c *QudataClient) CreateHost(req types.CreateHostRequest) error {
-	reqBody, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal create host request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/init/host", c.baseURL)
-	// isInit = false (используем новый секрет)
-	httpReq, err := c.newRequest("POST", url, reqBody, false)
-	if err != nil {
-		return fmt.Errorf("failed to create http request for create host: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.doRequest("POST", "/init/host", req)
 	if err != nil {
 		return fmt.Errorf("failed to send create host request: %w", err)
 	}
@@ -144,75 +124,41 @@ func (c *QudataClient) ReportIncident(incidentType, reason string) error {
 		InstancesKilled: true,
 	}
 
-	reqBody, err := json.Marshal(incidentPayload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal incident payload: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/incidents", c.baseURL)
-	// isInit = false
-	httpReq, err := c.newRequest("POST", url, reqBody, false)
-	if err != nil {
-		return fmt.Errorf("failed to create incident request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.doRequest("POST", "/incidents", incidentPayload)
 	if err != nil {
 		return fmt.Errorf("failed to send incident report: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned non-2xx status for incident report: %d", resp.StatusCode)
+		return fmt.Errorf("server returned non-2xx status: %d", resp.StatusCode)
 	}
-
 	return nil
 }
 
 func (c *QudataClient) SendStats(req types.StatsRequest) error {
-	reqBody, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal stats request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/stats", c.baseURL)
-	// isInit = false
-	httpReq, err := c.newRequest("POST", url, reqBody, false)
-	if err != nil {
-		return fmt.Errorf("failed to create stats request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.doRequest("POST", "/stats", req)
 	if err != nil {
 		return fmt.Errorf("failed to send stats: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned non-2xx status for stats: %d", resp.StatusCode)
+		return fmt.Errorf("server returned non-2xx status: %d", resp.StatusCode)
 	}
-
 	return nil
 }
 
 func (c *QudataClient) NotifyInstanceReady(instanceID string) error {
-	url := fmt.Sprintf("%s/instances/%s/ready", c.baseURL, instanceID)
-	// isInit = false, тело nil
-	httpReq, err := c.newRequest("POST", url, nil, false)
+	path := fmt.Sprintf("/instances/%s/ready", instanceID)
+	resp, err := c.doRequest("POST", path, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create instance ready request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("failed to send instance ready notification: %w", err)
+		return fmt.Errorf("failed to send ready notification: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("server returned non-2xx status for instance ready notification: %d", resp.StatusCode)
+		return fmt.Errorf("server returned non-2xx status: %d", resp.StatusCode)
 	}
-
-	log.Printf("Successfully notified server that instance %s is ready for SSH.", instanceID)
 	return nil
 }
