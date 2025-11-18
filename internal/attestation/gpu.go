@@ -4,7 +4,9 @@ package attestation
 
 /*
 #cgo LDFLAGS: -lnvidia-ml
-#include "gpu_linux.c"
+
+int get_gpu_count();
+int get_gpu_info_by_index(unsigned int index, char *name, unsigned int name_len, unsigned long long *vram, double *cuda_ver);
 */
 import "C"
 
