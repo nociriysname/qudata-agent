@@ -28,7 +28,7 @@ INSTALL_DIR="/opt/qudata-agent"
 KATA_VERSION="3.2.0"
 
 # --- Шаг 1: Системные зависимости ---
-echo -e "${YELLOW}[1/8] Installing system dependencies...${NC}"
+echo -e "${YELLOW}[1/7] Installing system dependencies...${NC}"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y --no-install-recommends \
@@ -38,18 +38,16 @@ apt-get install -y --no-install-recommends \
 echo -e "${GREEN}✓ System dependencies installed${NC}"
 
 # --- Шаг 2: Docker ---
-echo -e "${YELLOW}[2/8] Installing Docker...${NC}"
+echo -e "${YELLOW}[2/7] Installing Docker...${NC}"
 if ! command -v docker &> /dev/null; then
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
-    apt-get update -qq
-    apt-get install -y -qq docker-ce docker-ce-cli containerd.io
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    sh /tmp/get-docker.sh > /dev/null 2>&1
 fi
 systemctl enable --now docker > /dev/null 2>&1
 echo -e "${GREEN}✓ Docker is running${NC}"
 
 # --- Шаг 3: Установка и проверка NVIDIA ---
-echo -e "${YELLOW}[3/8] Installing and verifying NVIDIA components...${NC}"
+echo -e "${YELLOW}[3/7] Installing and verifying NVIDIA components...${NC}"
 if ! lspci | grep -iq nvidia; then
     echo -e "${YELLOW}Warning: No NVIDIA GPU detected. Skipping NVIDIA setup.${NC}"
 else
@@ -64,12 +62,7 @@ else
         exit 0
     fi
 
-    echo "  Installing NVIDIA Container Toolkit and ML headers..."
-    apt-get install -y -qq libnvidia-ml-dev || {
-        echo "  'libnvidia-ml-dev' not found, trying fallback packages..."
-        apt-get install -y -qq nvidia-utils-* libnvidia-compute-* 2>/dev/null || true
-    }
-
+    echo "  Installing NVIDIA Container Toolkit..."
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
       && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
         sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
@@ -83,7 +76,7 @@ else
 fi
 
 # --- Шаг 4: Kata Containers ---
-echo -e "${YELLOW}[4/8] Installing and configuring Kata Containers v${KATA_VERSION}...${NC}"
+echo -e "${YELLOW}[4/7] Installing and configuring Kata Containers v${KATA_VERSION}...${NC}"
 if ! command -v kata-runtime &> /dev/null; then
     ARCH=$(uname -m)
     if [ "$ARCH" != "x86_64" ]; then
@@ -93,25 +86,21 @@ if ! command -v kata-runtime &> /dev/null; then
     KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_PACKAGE}"
     echo "  Downloading Kata package..."
     curl -fLo "/tmp/$KATA_PACKAGE" "$KATA_URL"
-
     echo "  Creating /opt/kata directory..."
     mkdir -p /opt/kata
-
     echo "  Extracting package to /opt/kata..."
     tar -xJf "/tmp/$KATA_PACKAGE" -C /opt/kata --strip-components=1
-
     rm -f "/tmp/$KATA_PACKAGE"
     echo "  Creating symlink for kata-runtime..."
     ln -sf /opt/kata/bin/kata-runtime /usr/local/bin/kata-runtime
 fi
 echo "  Creating Kata configuration files..."
-echo "  Creating Kata configuration files..."
 mkdir -p /etc/kata-containers
 cp "deploy/kata-configuration.toml" "/etc/kata-containers/configuration.toml"
 cp "deploy/kata-configuration-cvm.toml" "/etc/kata-containers/configuration-cvm.toml"
 
-# --- Шаг 5: ЕДИНАЯ КОНФИГУРАЦИЯ DOCKER ---
-echo -e "${YELLOW}[5/8] Configuring Docker daemon for Kata...${NC}"
+# --- Шаг 5: Конфигурация Docker ---
+echo -e "${YELLOW}[5/7] Configuring Docker daemon for Kata...${NC}"
 mkdir -p /etc/docker
 if [ ! -f /etc/docker/daemon.json ]; then echo '{}' > /etc/docker/daemon.json; fi
 TEMP_JSON=$(mktemp)
@@ -122,8 +111,8 @@ jq '.runtimes = (.runtimes // {}) + {
 systemctl restart docker
 echo -e "${GREEN}✓ Docker daemon configured for Kata${NC}"
 
-# --- Шаг 6: Установка Go ---
-echo -e "${YELLOW}[6/8] Installing Go toolchain...${NC}"
+# --- Шаг 6: Установка Go и Сборка Агента ---
+echo -e "${YELLOW}[6/7] Building QuData Agent...${NC}"
 REQUIRED_GO_VERSION=$(grep -oP '^go\s+\K[0-9]+\.[0-9]+(\.[0-9]+)?' go.mod)
 if [ -z "$REQUIRED_GO_VERSION" ]; then
     echo -e "${RED}Error: Could not determine Go version from go.mod. Using default.${NC}"
@@ -140,49 +129,28 @@ if [ "$INSTALLED_GO_VERSION" != "$REQUIRED_GO_VERSION" ]; then
     rm -rf /usr/local/go
     tar -C /usr/local -xzf "/tmp/${GO_TARBALL}"
     rm "/tmp/${GO_TARBALL}"
-    echo -e "${GREEN}✓ Go toolchain v${REQUIRED_GO_VERSION} installed${NC}"
-else
-    echo -e "${GREEN}✓ Go toolchain v${REQUIRED_GO_VERSION} is already installed${NC}"
 fi
-
-# --- Шаг 7: Сборка и установка Go-агента ---
-echo -e "${YELLOW}[7/8] Building and installing QuData Agent...${NC}"
-TEMP_BUILD_DIR="/tmp/qudata-agent-build"
-if [ -d "$TEMP_BUILD_DIR" ]; then
-    cd "$TEMP_BUILD_DIR"
-    git pull -q
-else
-    git clone -q "https://github.com/nociriysname/qudata-agent.git" "$TEMP_BUILD_DIR"
-    cd "$TEMP_BUILD_DIR"
-fi
-if [ ! -f "go.mod" ]; then
-    echo -e "${RED}Error: go.mod not found. Please run this script from the project root directory.${NC}"; exit 1;
-fi
-echo "  Locating libnvidia-ml.so..."
-LIB_PATH=$(find /usr -name "libnvidia-ml.so.1" -printf "%h" -quit)
-if [ -z "$LIB_PATH" ]; then
-    echo -e "${YELLOW}Warning: libnvidia-ml.so.1 not found. CGO build might fail.${NC}"
-    LIB_PATH="/usr/lib/x86_64-linux-gnu"
-fi
-echo "  Found NVIDIA library at: $LIB_PATH"
-echo "  Building agent binary..."
-export CGO_LDFLAGS="-L${LIB_PATH}"
-if ! CGO_ENABLED=1 /usr/local/go/bin/go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent; then
-    echo -e "${RED}ERROR: Failed to build qudata-agent with CGO${NC}"
-    exit 1
-fi
-unset CGO_LDFLAGS
+echo "  Building agent binary (CGO disabled)..."
+CGO_ENABLED=0 /usr/local/go/bin/go build -ldflags="-s -w" -o /usr/local/bin/qudata-agent ./cmd/agent
 chmod +x /usr/local/bin/qudata-agent
 mkdir -p "$INSTALL_DIR"
-echo -e "${GREEN}✓ Agent binary installed to /usr/local/bin/qudata-agent${NC}"
+echo -e "${GREEN}✓ Agent binary installed${NC}"
 
-# --- Шаг 8: Создание и запуск сервиса ---
-echo -e "${YELLOW}[8/8] Starting QuData Agent service and activating Authz plugin...${NC}"
+# --- Шаг 7: Запуск сервиса ---
+echo -e "${YELLOW}[7/7] Starting QuData Agent service...${NC}"
+tee "/etc/audit/rules.d/99-qudata.rules" > /dev/null <<EOF
+-w /usr/bin/virsh -p x -k qudata_exec_watch
+-w /usr/bin/qemu-img -p x -k qudata_exec_watch
+EOF
+augenrules --load || systemctl restart auditd
+PROFILE_PATH="/etc/apparmor.d/usr.local.bin.qudata-agent"
+cp "deploy/qudata-agent.profile" "$PROFILE_PATH"
+apparmor_parser -r "$PROFILE_PATH"
+aa-enforce "qudata-agent" 2>/dev/null || true
+
+# Запуск сервиса
 cp "deploy/qudata-agent.service" /etc/systemd/system/qudata-agent.service
 sed -i "s/YOUR_API_KEY_PLACEHOLDER/$API_KEY/g" /etc/systemd/system/qudata-agent.service
-cp "deploy/qudata-agent.profile" "/etc/apparmor.d/usr.local.bin.qudata-agent"
-apparmor_parser -r "/etc/apparmor.d/usr.local.bin.qudata-agent"
-aa-enforce "qudata-agent" 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable --now qudata-agent.service
 
@@ -194,6 +162,7 @@ if ! systemctl is-active --quiet qudata-agent.service; then
     exit 1
 fi
 
+# Активация Authz плагина
 echo "  Activating Docker authorization plugin..."
 mkdir -p /etc/docker/plugins
 echo '{"Socket": "qudata-authz.sock"}' > /etc/docker/plugins/qudata-authz.json

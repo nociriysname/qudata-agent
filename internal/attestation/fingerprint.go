@@ -1,19 +1,15 @@
-//go:build linux && cgo
+//go:build linux
 
 package attestation
 
-/*
-#cgo LDFLAGS: -lnvidia-ml
-
-const char* getGpuSerial();
-*/
-import "C"
-
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
 	"strings"
+
+	"github.com/nociriysname/qudata-agent/internal/utils"
 )
 
 func GetFingerprint() string {
@@ -23,8 +19,9 @@ func GetFingerprint() string {
 		parts = append(parts, strings.TrimSpace(string(b)))
 	}
 
-	if serial := C.getGpuSerial(); serial != nil {
-		parts = append(parts, C.GoString(serial))
+	serial, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=serial", "--format=csv,noheader", "-i", "0")
+	if err == nil && strings.TrimSpace(serial) != "[N/A]" {
+		parts = append(parts, strings.TrimSpace(serial))
 	}
 
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
