@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"os"
 	"runtime"
 	"strconv"
@@ -76,29 +77,43 @@ func GenerateHostReport() *HostReport {
 	}
 }
 
-// --- 3. Реализация всех вспомогательных функций ---
-
 func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
+	// Получаем количество GPU
 	countOutput, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=count", "--format=csv,noheader")
 	if err != nil {
+		// Если nvidia-smi не найдена, это не ошибка, просто нет GPU.
 		return nil, 0, nil
 	}
 	count, _ := strconv.Atoi(strings.TrimSpace(countOutput))
 	if count == 0 {
 		return nil, 0, nil
 	}
+
+	// Получаем информацию по каждой карте
 	for i := 0; i < count; i++ {
 		index := strconv.Itoa(i)
 		var gpu GPUInfo
+
+		// Имя
 		nameOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader", "-i", index)
 		gpu.Name = strings.TrimSpace(nameOutput)
+
+		// VRAM
 		vramOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits", "-i", index)
 		vramMiB, _ := strconv.ParseFloat(strings.TrimSpace(vramOutput), 64)
 		gpu.VRAM_GB = vramMiB / 1024
+
 		gpus = append(gpus, gpu)
 	}
-	cudaOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-driver=cuda_version", "--format=csv,noheader")
-	cudaVersion, _ = strconv.ParseFloat(strings.TrimSpace(cudaOutput), 64)
+
+	// Версия CUDA
+	cudaOutput, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-driver=cuda_version", "--format=csv,noheader")
+	if err == nil {
+		cudaVersion, _ = strconv.ParseFloat(strings.TrimSpace(cudaOutput), 64)
+	} else {
+		log.Printf("Warning: could not get CUDA version via nvidia-smi: %v", err)
+	}
+
 	return gpus, cudaVersion, nil
 }
 
