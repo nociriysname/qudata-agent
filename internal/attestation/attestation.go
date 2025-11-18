@@ -78,12 +78,12 @@ func GenerateHostReport() *HostReport {
 }
 
 func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
-	// Получаем количество GPU
-	countOutput, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=count", "--format=csv,noheader")
+	_, err = utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi")
 	if err != nil {
-		// Если nvidia-smi не найдена, это не ошибка, просто нет GPU.
 		return nil, 0, nil
 	}
+
+	countOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=count", "--format=csv,noheader")
 	count, _ := strconv.Atoi(strings.TrimSpace(countOutput))
 	if count == 0 {
 		return nil, 0, nil
@@ -93,23 +93,26 @@ func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
 	for i := 0; i < count; i++ {
 		index := strconv.Itoa(i)
 		var gpu GPUInfo
-
-		// Имя
 		nameOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader", "-i", index)
 		gpu.Name = strings.TrimSpace(nameOutput)
-
-		// VRAM
 		vramOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits", "-i", index)
 		vramMiB, _ := strconv.ParseFloat(strings.TrimSpace(vramOutput), 64)
 		gpu.VRAM_GB = vramMiB / 1024
-
 		gpus = append(gpus, gpu)
 	}
 
-	// Версия CUDA
-	cudaOutput, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-driver=cuda_version", "--format=csv,noheader")
+	fullOutput, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi")
 	if err == nil {
-		cudaVersion, _ = strconv.ParseFloat(strings.TrimSpace(cudaOutput), 64)
+		lines := strings.Split(fullOutput, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "CUDA Version:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 3 {
+					cudaVersion, _ = strconv.ParseFloat(fields[len(fields)-2], 64)
+					break
+				}
+			}
+		}
 	} else {
 		log.Printf("Warning: could not get CUDA version via nvidia-smi: %v", err)
 	}
