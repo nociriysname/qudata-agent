@@ -94,27 +94,6 @@ func checkResponse(resp *http.Response) error {
 	return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(body))
 }
 
-func (c *QudataClient) newRequest(method, url string, body []byte, useApiKey bool) (*http.Request, error) {
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	if useApiKey {
-		req.Header.Set("X-Api-Key", c.apiKey)
-		if c.secretKey != "" {
-			req.Header.Set("X-Agent-Secret", c.secretKey)
-		}
-	} else {
-		if c.secretKey == "" {
-			return nil, fmt.Errorf("agent secret key is missing")
-		}
-		req.Header.Set("X-Agent-Secret", c.secretKey)
-	}
-	return req, nil
-}
-
 func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentResponse, error) {
 	resp, err := c.doRequest("POST", "/init", req)
 	if err != nil {
@@ -124,7 +103,6 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	log.Printf("DEBUG RAW INIT RESPONSE: %s", string(bodyBytes))
-
 	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	if resp.StatusCode != http.StatusOK {
@@ -140,20 +118,7 @@ func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentRespon
 }
 
 func (c *QudataClient) CreateHost(req types.CreateHostRequest) error {
-	reqBody, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal create host request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/init/host", c.baseURL)
-
-	httpReq, err := c.newRequest("POST", url, reqBody, false)
-
-	if err != nil {
-		return fmt.Errorf("failed to create http request for create host: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.doRequest("POST", "/init/host", req)
 	if err != nil {
 		return fmt.Errorf("failed to send create host request: %w", err)
 	}
