@@ -20,8 +20,19 @@ const (
 	containerDataPath = "/data"
 )
 
-func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.CreateInstanceRequest, state *agenttypes.InstanceState, iommuGroupPath string, runtimeName string) (string, error) {
+func runContainer(
+	ctx context.Context,
+	cli *client.Client,
+	req *agenttypes.CreateInstanceRequest,
+	state *agenttypes.InstanceState,
+	deviceMappings []container.DeviceMapping,
+	runtimeName string,
+) (string, error) {
+
 	imageName := fmt.Sprintf("%s:%s", req.Image, req.ImageTag)
+	if req.ImageTag == "" {
+		imageName = req.Image
+	}
 
 	reader, err := cli.ImagePull(ctx, imageName, types.ImagePullOptions{})
 	if err != nil {
@@ -58,6 +69,7 @@ func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.Creat
 		Image:        imageName,
 		Env:          envs,
 		ExposedPorts: exposedPorts,
+		Tty:          true,
 	}
 
 	hostConfig := &container.HostConfig{
@@ -70,28 +82,16 @@ func runContainer(ctx context.Context, cli *client.Client, req *agenttypes.Creat
 			},
 		},
 		PortBindings: portBindings,
-	}
-
-	if iommuGroupPath != "" {
-		hostConfig.Devices = []container.DeviceMapping{
-			{
-				PathOnHost:        "/dev/vfio/vfio",
-				PathInContainer:   "/dev/vfio/vfio",
-				CgroupPermissions: "rwm",
-			},
-			{
-				PathOnHost:        iommuGroupPath,
-				PathInContainer:   iommuGroupPath,
-				CgroupPermissions: "rwm",
-			},
-		}
+		Resources: container.Resources{
+			Devices: deviceMappings,
+		},
 	}
 
 	resp, err := cli.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to create container: %w", err)
 	}
-
+	
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return "", fmt.Errorf("failed to start container %s: %w", resp.ID, err)
 	}
@@ -106,6 +106,7 @@ func removeContainer(ctx context.Context, cli *client.Client, containerID string
 
 	timeoutInSeconds := 10
 	stopOptions := container.StopOptions{Timeout: &timeoutInSeconds}
+
 	err := cli.ContainerStop(ctx, containerID, stopOptions)
 	if err != nil && !client.IsErrNotFound(err) {
 		fmt.Printf("Warning: failed to stop container %s: %v\n", containerID, err)

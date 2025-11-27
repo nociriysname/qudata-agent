@@ -32,9 +32,7 @@ type Orchestrator struct {
 }
 
 func New(qClient QudataClient) (*Orchestrator, error) {
-	customHeaders := map[string]string{
-		"X-Qudata-Agent": "true",
-	}
+	customHeaders := map[string]string{"X-Qudata-Agent": "true"}
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation(), client.WithHTTPHeaders(customHeaders))
 	if err != nil {
@@ -42,22 +40,18 @@ func New(qClient QudataClient) (*Orchestrator, error) {
 	}
 
 	if _, err := cli.Ping(context.Background()); err != nil {
-		return nil, fmt.Errorf("cannot connect to docker daemon: %w", err)
+		return nil, fmt.Errorf("docker daemon unreachable: %w", err)
 	}
 
-	if err := os.MkdirAll(storageDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create storage dir: %w", err)
-	}
-	if err := os.MkdirAll(mountDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create mount dir: %w", err)
-	}
+	os.MkdirAll(storageDir, 0755)
+	os.MkdirAll(mountDir, 0755)
 
 	return &Orchestrator{dockerCli: cli, qudataCli: qClient}, nil
 }
 
 func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.CreateInstanceRequest) (*agenttypes.InstanceState, error) {
 	currentState := storage.GetState()
-	if currentState.Status != storage.StatusDestroyed {
+	if currentState.Status != "destroyed" && currentState.Status != "" {
 		return nil, fmt.Errorf("an instance '%s' is already running", currentState.InstanceID)
 	}
 
@@ -71,64 +65,36 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 		AllocatedPorts: req.Ports,
 	}
 
-	var iommuGroupPath string
-
+	var deviceMappings []container.DeviceMapping
 	if req.GPUCount > 0 {
-		pciAddress, originalDriver, iommuPath, err := prepareGPUForPassthrough(ctx)
+		pci, origDriver, vfioPath, err := PrepareGPU(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to prepare GPU for passthrough: %w", err)
+			return nil, fmt.Errorf("GPU error: %w", err)
 		}
-		newState.PciAddress = pciAddress
-		newState.OriginalDriver = originalDriver
-		iommuGroupPath = iommuPath
+		newState.PciAddress = pci
+		newState.OriginalDriver = origDriver
+
+		deviceMappings = []container.DeviceMapping{
+			{PathOnHost: "/dev/vfio/vfio", PathInContainer: "/dev/vfio/vfio", CgroupPermissions: "rwm"},
+			{PathOnHost: vfioPath, PathInContainer: vfioPath, CgroupPermissions: "rwm"},
+		}
 	}
 
 	if err := createEncryptedVolume(ctx, newState, req.StorageGB); err != nil {
-		if newState.PciAddress != "" {
-			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
-		}
-		_ = deleteEncryptedVolume(context.Background(), newState)
-		return nil, fmt.Errorf("failed to create encrypted volume: %w", err)
+		o.rollback(ctx, newState)
+		return nil, fmt.Errorf("LUKS error: %w", err)
 	}
 
 	runtimeName := SelectRuntime(req.IsConfidential)
-	containerID, err := runContainer(ctx, o.dockerCli, &req, newState, iommuGroupPath, runtimeName)
+	containerID, err := runContainer(ctx, o.dockerCli, &req, newState, deviceMappings, runtimeName)
 	if err != nil {
-		if newState.PciAddress != "" {
-			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
-		}
-		_ = deleteEncryptedVolume(context.Background(), newState)
-		return nil, fmt.Errorf("failed to run container: %w", err)
+		o.rollback(ctx, newState)
+		return nil, fmt.Errorf("start failed: %w", err)
 	}
+
 	newState.ContainerID = containerID
-
-	containerIP, err := getContainerIP(ctx, o.dockerCli, containerID)
-	if err != nil {
-		_ = removeContainer(context.Background(), o.dockerCli, containerID)
-		_ = deleteEncryptedVolume(context.Background(), newState)
-		if newState.PciAddress != "" {
-			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
-		}
-		return nil, fmt.Errorf("failed to get container IP for network isolation: %w", err)
-	}
-	if err := applyNetworkIsolation(ctx, containerIP); err != nil {
-		_ = removeContainer(context.Background(), o.dockerCli, containerID)
-		_ = deleteEncryptedVolume(context.Background(), newState)
-		if newState.PciAddress != "" {
-			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
-		}
-		return nil, fmt.Errorf("failed to apply network isolation: %w", err)
-	}
-
 	newState.Status = "running"
-	if err := storage.SaveState(newState); err != nil {
-		_ = removeContainer(context.Background(), o.dockerCli, containerID)
-		_ = deleteEncryptedVolume(context.Background(), newState)
-		if newState.PciAddress != "" {
-			_ = returnGPUToHost(context.Background(), newState.PciAddress, newState.OriginalDriver)
-		}
-		return nil, fmt.Errorf("CRITICAL: failed to save state after instance creation: %w", err)
-	}
+	storage.SaveState(newState)
 
 	if req.SSHEnabled {
 		go setupSSHInContainer(o.dockerCli, o.qudataCli, newState.ContainerID)
@@ -138,206 +104,140 @@ func (o *Orchestrator) CreateInstance(ctx context.Context, req agenttypes.Create
 }
 
 func (o *Orchestrator) DeleteInstance(ctx context.Context) error {
-	currentState := storage.GetState()
-	if currentState.Status == storage.StatusDestroyed {
+	state := storage.GetState()
+	if state.ContainerID == "" {
 		return nil
 	}
+	o.rollback(ctx, &state)
+	return nil
+}
 
-	containerIP, err := getContainerIP(ctx, o.dockerCli, currentState.ContainerID)
-	if err != nil {
-		fmt.Printf("Warning: could not get container IP for cleanup: %v\n", err)
+func (o *Orchestrator) rollback(ctx context.Context, state *agenttypes.InstanceState) {
+	removeContainer(ctx, o.dockerCli, state.ContainerID)
+	deleteEncryptedVolume(ctx, state)
+	if state.PciAddress != "" {
+		ReturnGPUToHost(ctx, state.PciAddress, state.OriginalDriver)
 	}
-
-	if err := removeContainer(ctx, o.dockerCli, currentState.ContainerID); err != nil {
-		fmt.Printf("Warning: failed to remove container during deletion: %v\n", err)
-	}
-
-	if containerIP != "" {
-		if err := removeNetworkIsolation(ctx, containerIP); err != nil {
-			fmt.Printf("Warning: failed to remove network isolation: %v\n", err)
-		}
-	}
-
-	if currentState.PciAddress != "" && currentState.OriginalDriver != "" {
-		if err := returnGPUToHost(ctx, currentState.PciAddress, currentState.OriginalDriver); err != nil {
-			fmt.Printf("Warning: failed to return GPU to host: %v\n", err)
-		}
-	}
-
-	if err := deleteEncryptedVolume(ctx, &currentState); err != nil {
-		return fmt.Errorf("failed to delete encrypted volume: %w", err)
-	}
-
-	return storage.ClearState()
+	storage.ClearState()
 }
 
 func (o *Orchestrator) ManageInstance(ctx context.Context, action agenttypes.InstanceAction) error {
-	currentState := storage.GetState()
-	if currentState.Status == storage.StatusDestroyed || currentState.ContainerID == "" {
-		return fmt.Errorf("no active instance to manage")
+	state := storage.GetState()
+	if state.ContainerID == "" {
+		return fmt.Errorf("no active instance")
 	}
 
 	var err error
-	newStatus := currentState.Status
-
+	newStatus := state.Status
 	timeout := 10
-	stopOptions := container.StopOptions{Timeout: &timeout}
 
 	switch action {
-	case agenttypes.ActionStart:
-		if currentState.Status != "paused" {
-			return fmt.Errorf("instance is not stopped, current status: %s", currentState.Status)
-		}
-		err = o.dockerCli.ContainerStart(ctx, currentState.ContainerID, container.StartOptions{})
-		if err == nil {
-			newStatus = "running"
-		}
 	case agenttypes.ActionStop:
-		err = o.dockerCli.ContainerStop(ctx, currentState.ContainerID, stopOptions)
+		err = o.dockerCli.ContainerStop(ctx, state.ContainerID, container.StopOptions{Timeout: &timeout})
 		if err == nil {
 			newStatus = "paused"
 		}
+	case agenttypes.ActionStart:
+		err = o.dockerCli.ContainerStart(ctx, state.ContainerID, container.StartOptions{})
+		if err == nil {
+			newStatus = "running"
+		}
 	case agenttypes.ActionRestart:
-		err = o.dockerCli.ContainerRestart(ctx, currentState.ContainerID, stopOptions)
+		err = o.dockerCli.ContainerRestart(ctx, state.ContainerID, container.StopOptions{Timeout: &timeout})
 		if err == nil {
 			newStatus = "running"
 		}
 	default:
-		return fmt.Errorf("unknown instance action: %s", action)
+		return fmt.Errorf("unknown action: %s", action)
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to perform action '%s': %w", action, err)
+		return fmt.Errorf("manage action %s failed: %w", action, err)
 	}
 
-	if newStatus != currentState.Status {
-		currentState.Status = newStatus
-		if err := storage.SaveState(&currentState); err != nil {
-			log.Printf("CRITICAL: failed to save state after action '%s': %v", action, err)
-		}
+	if newStatus != state.Status {
+		state.Status = newStatus
+		storage.SaveState(&state)
 	}
 
 	return nil
 }
 
-func (o *Orchestrator) AddSSHKey(ctx context.Context, publicKey string) error {
-	currentState := storage.GetState()
-	if currentState.Status != "running" || currentState.ContainerID == "" {
-		return fmt.Errorf("no active instance to add SSH key to")
+func (o *Orchestrator) AddSSHKey(ctx context.Context, key string) error {
+	state := storage.GetState()
+	if state.Status != "running" {
+		return fmt.Errorf("instance is not running")
 	}
-	return addSSHKey(ctx, o.dockerCli, currentState.ContainerID, publicKey)
+	return addSSHKey(ctx, o.dockerCli, state.ContainerID, key)
 }
 
-func (o *Orchestrator) RemoveSSHKey(ctx context.Context, publicKey string) error {
-	currentState := storage.GetState()
-	if currentState.Status != "running" || currentState.ContainerID == "" {
-		return fmt.Errorf("no active instance to remove SSH key from")
+func (o *Orchestrator) RemoveSSHKey(ctx context.Context, key string) error {
+	state := storage.GetState()
+	if state.Status != "running" {
+		return fmt.Errorf("instance is not running")
 	}
-	return removeSSHKey(ctx, o.dockerCli, currentState.ContainerID, publicKey)
+	return removeSSHKey(ctx, o.dockerCli, state.ContainerID, key)
 }
 
 func (o *Orchestrator) ListSSHKeys(ctx context.Context) ([]string, error) {
-	currentState := storage.GetState()
-	if currentState.Status != "running" || currentState.ContainerID == "" {
-		return nil, fmt.Errorf("no active instance to list SSH keys from")
+	state := storage.GetState()
+	if state.Status != "running" {
+		return nil, fmt.Errorf("instance is not running")
 	}
 
-	keysString, err := listSSHKeys(ctx, o.dockerCli, currentState.ContainerID)
+	out, err := listSSHKeys(ctx, o.dockerCli, state.ContainerID)
 	if err != nil {
 		return nil, err
 	}
 
 	var keys []string
-	for _, key := range strings.Split(keysString, "\n") {
-		if trimmedKey := strings.TrimSpace(key); trimmedKey != "" {
-			keys = append(keys, trimmedKey)
+	for _, line := range strings.Split(out, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			keys = append(keys, trimmed)
 		}
 	}
-
 	return keys, nil
 }
 
-func NewLite() (*Orchestrator, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return nil, fmt.Errorf("failed to create docker client: %w", err)
-	}
-	return &Orchestrator{dockerCli: cli}, nil
-}
-
-func (o *Orchestrator) SyncState(ctx context.Context) error {
-	currentState := storage.GetState()
-	if currentState.Status == storage.StatusDestroyed || currentState.ContainerID == "" {
-		return nil
-	}
-
-	log.Println("Syncing agent state with Docker...")
-
-	inspect, err := o.dockerCli.ContainerInspect(ctx, currentState.ContainerID)
-	if err != nil {
-		if client.IsErrNotFound(err) {
-			log.Printf("SyncState: Container %s not found. Clearing state.", currentState.ContainerID[:12])
-			_ = o.DeleteInstance(ctx)
-			return storage.ClearState()
-		}
-		return fmt.Errorf("SyncState: failed to inspect container %s: %w", currentState.ContainerID, err)
-	}
-
-	dockerStatus := inspect.State.Status // "running", "exited", "paused", etc.
-	agentStatus := currentState.Status
-	needsSave := false
-
-	log.Printf("SyncState: Container status in Docker is '%s', agent state is '%s'.", dockerStatus, agentStatus)
-
-	switch dockerStatus {
-	case "running":
-		if agentStatus != "running" {
-			currentState.Status = "running"
-			needsSave = true
-		}
-	case "exited", "dead":
-		if agentStatus != "paused" {
-			currentState.Status = "paused"
-			needsSave = true
-		}
-	case "paused":
-		if agentStatus != "paused" {
-			currentState.Status = "paused"
-			needsSave = true
-		}
-	}
-
-	if needsSave {
-		log.Printf("SyncState: State mismatch detected. Updating agent state to '%s'.", currentState.Status)
-		return storage.SaveState(&currentState)
-	}
-
-	log.Println("SyncState: State is consistent.")
-	return nil
-}
-
 func (o *Orchestrator) GetInstanceLogs(ctx context.Context) (string, error) {
-	currentState := storage.GetState()
-	if currentState.Status == storage.StatusDestroyed || currentState.ContainerID == "" {
-		return "", fmt.Errorf("no active instance to get logs from")
+	state := storage.GetState()
+	if state.ContainerID == "" {
+		return "", fmt.Errorf("no instance found")
 	}
 
-	logOptions := container.LogsOptions{
+	options := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       "100",
 	}
 
-	reader, err := o.dockerCli.ContainerLogs(ctx, currentState.ContainerID, logOptions)
+	reader, err := o.dockerCli.ContainerLogs(ctx, state.ContainerID, options)
 	if err != nil {
-		return "", fmt.Errorf("failed to get container logs: %w", err)
+		return "", err
 	}
 	defer reader.Close()
 
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(reader); err != nil {
-		return "", fmt.Errorf("failed to read logs from stream: %w", err)
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(reader)
+	return buf.String(), nil
+}
+
+func (o *Orchestrator) SyncState(ctx context.Context) error {
+	currentState := storage.GetState()
+	if currentState.ContainerID == "" {
+		return nil
 	}
 
-	return buf.String(), nil
+	_, err := o.dockerCli.ContainerInspect(ctx, currentState.ContainerID)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+
+			log.Printf("SyncState: Container %s not found. Cleaning up.", currentState.ContainerID)
+			o.rollback(ctx, &currentState)
+			return nil
+		}
+		return fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	return nil
 }

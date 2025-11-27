@@ -28,8 +28,6 @@ func RunCommand(ctx context.Context, stdinData string, name string, args ...stri
 	return nil
 }
 
-// RunCommandGetOutput выполняет команду и возвращает ее stdout.
-// Убедитесь, что эта функция существует и начинается с заглавной буквы.
 func RunCommandGetOutput(ctx context.Context, stdinData string, name string, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 

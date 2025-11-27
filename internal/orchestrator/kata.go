@@ -1,13 +1,13 @@
 package orchestrator
 
 const (
-	runtimeKataQEMU = "kata-qemu"
-	runtimeKataCVM  = "kata-cvm"
+	RuntimeKataQEMU = "kata-qemu"
+	RuntimeKataCVM  = "kata-cvm"
 )
 
 func SelectRuntime(isConfidential bool) string {
 	if isConfidential {
-		return runtimeKataCVM
+		return RuntimeKataCVM
 	}
-	return runtimeKataQEMU
+	return RuntimeKataQEMU
 }

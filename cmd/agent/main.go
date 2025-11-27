@@ -27,6 +27,7 @@ import (
 const agentPort = 8080
 
 func main() {
+	// Защита агента: если запущен как дочерний процесс для слежения
 	if security.IsWatchdogChild() {
 		runWatchdogChild()
 	} else {
@@ -35,38 +36,44 @@ func main() {
 }
 
 func runWatchdogChild() {
+	// Загружаем конфиг для восстановления
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Printf("FATAL [Watchdog Child]: Failed to load config: %v", err)
+		log.Printf("FATAL [Watchdog]: Failed to load config: %v", err)
 		os.Exit(1)
 	}
 	qClient, err := client.NewClient(cfg.APIKey)
 	if err != nil {
-		log.Printf("FATAL [Watchdog Child]: Failed to create client: %v", err)
-		os.Exit(1)
-	}
-	orch, err := orchestrator.NewLite()
-	if err != nil {
-		log.Printf("FATAL [Watchdog Child]: Failed to create orchestrator: %v", err)
+		log.Printf("FATAL [Watchdog]: Failed to create client: %v", err)
 		os.Exit(1)
 	}
 
+	// Инициализируем оркестратор для экстренного удаления
+	orch, err := orchestrator.New(qClient)
+	if err != nil {
+		log.Printf("FATAL [Watchdog]: Failed to create orchestrator: %v", err)
+		os.Exit(1)
+	}
+
+	// Запускаем слежение за основным процессом
 	deps := security.NewLockdownDependencies(orch, qClient)
 	security.RunAsChild(deps)
 }
 
 func runMainAgent() {
 	logger := log.New(os.Stdout, "QUDATA-AGENT | ", log.LstdFlags)
-	logger.Println("Starting main agent process...")
+	logger.Println(">>> QuData Agent (Bare Metal + Kata + CGO) Starting...")
 
+	// 1. Запуск Watchdog (родительский процесс следит за нами)
 	if err := security.StartWatchdog(); err != nil {
-		logger.Fatalf("FATAL: %v", err)
+		logger.Fatalf("FATAL: Watchdog failed: %v", err)
 	}
 
+	// Уведомляем systemd (если есть)
 	interval, err := daemon.SdWatchdogEnabled(false)
 	if err == nil && interval > 0 {
 		go func() {
-			ticker := time.NewTicker(interval)
+			ticker := time.NewTicker(interval / 2)
 			defer ticker.Stop()
 			for range ticker.C {
 				daemon.SdNotify(false, daemon.SdNotifyWatchdog)
@@ -75,52 +82,58 @@ func runMainAgent() {
 		logger.Println("Systemd watchdog enabled.")
 	}
 
+	// 2. Конфигурация и Состояние
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		logger.Fatalf("FATAL: Failed to load configuration: %v", err)
+		logger.Fatalf("FATAL: Config error: %v", err)
 	}
 
 	if err := storage.LoadState(); err != nil {
-		logger.Fatalf("FATAL: Failed to load initial state: %v", err)
+		logger.Fatalf("FATAL: State load error: %v", err)
 	}
-	logger.Printf("Initial state loaded. Current status: %s", storage.GetState().Status)
+	logger.Printf("State loaded. Status: %s", storage.GetState().Status)
 
+	// 3. Клиент API
 	qClient, err := client.NewClient(cfg.APIKey)
 	if err != nil {
-		logger.Fatalf("FATAL: Failed to create qudata client: %v", err)
+		logger.Fatalf("FATAL: Client error: %v", err)
 	}
 
-	logger.Println("Generating host hardware report...")
+	// 4. АТТЕСТАЦИЯ (CGO)
+	logger.Println("Running Hardware Attestation (CGO)...")
 	hostReport := attestation.GenerateHostReport()
 	if hostReport == nil {
-		logger.Fatalf("FATAL: Could not generate host hardware report.")
+		logger.Fatalf("FATAL: Hardware attestation failed.")
 	}
 
+	// 5. Инициализация на бэкенде
 	initReq := types.InitAgentRequest{
-		AgentID:     uuid.NewString(),
+		AgentID:     uuid.NewString(), // В идеале читать из storage.GetAgentID()
 		AgentPort:   agentPort,
 		Address:     getOutboundIP(),
 		Fingerprint: hostReport.Fingerprint,
 		PID:         os.Getpid(),
 	}
 
-	logger.Println("Initializing agent on Qudata server...")
+	logger.Println("Registering agent...")
 	agentResp, err := qClient.InitAgent(initReq)
 	if err != nil {
-		logger.Fatalf("FATAL: Failed to initialize agent on server: %v", err)
+		logger.Fatalf("FATAL: Init failed: %v", err)
 	}
-	logger.Printf("Agent initialized successfully. Host exists: %v", agentResp.HostExists)
+	logger.Printf("Agent registered. Host exists: %v", agentResp.HostExists)
 
+	// Сохраняем секретный ключ
 	if agentResp.SecretKey != "" {
 		if err := storage.SaveSecretKey(agentResp.SecretKey); err != nil {
-			logger.Fatalf("FATAL: Failed to save new secret key: %v", err)
+			logger.Fatalf("FATAL: Save secret failed: %v", err)
 		}
 		qClient.UpdateSecret(agentResp.SecretKey)
-		logger.Println("New secret key saved and activated.")
+		logger.Println("Secret key updated.")
 	}
 
+	// Если хост новый - регистрируем железо
 	if !agentResp.HostExists {
-		logger.Println("Host not found on server. Registering new host...")
+		logger.Println("Registering new host hardware...")
 
 		createHostReq := types.CreateHostRequest{
 			GPUName:       hostReport.GPUName,
@@ -130,85 +143,82 @@ func runMainAgent() {
 			Configuration: hostReport.Configuration,
 		}
 
+		// Логгируем JSON для отладки
 		jsonData, _ := json.MarshalIndent(createHostReq, "", "  ")
-		logger.Printf("Sending CreateHost request: %s", string(jsonData))
+		logger.Printf("Host Payload: %s", string(jsonData))
 
 		if err := qClient.CreateHost(createHostReq); err != nil {
-			logger.Fatalf("FATAL: Failed to register host on server: %v", err)
+			logger.Fatalf("FATAL: Host registration failed: %v", err)
 		}
 		logger.Println("Host registered successfully.")
 	}
 
+	// 6. Оркестратор (Kata + GPU)
 	orch, err := orchestrator.New(qClient)
 	if err != nil {
-		logger.Fatalf("FATAL: Failed to initialize orchestrator: %v", err)
+		logger.Fatalf("FATAL: Orchestrator init failed: %v", err)
 	}
-	logger.Println("Orchestrator initialized successfully.")
 
+	// Синхронизация состояния (если агент перезапустился)
 	if err := orch.SyncState(context.Background()); err != nil {
-		logger.Fatalf("FATAL: Failed to sync state with Docker: %v", err)
+		logger.Printf("Warning: State sync failed: %v", err)
 	}
 
+	// 7. Монитор безопасности (Auditd, AuthZ)
 	secMon, err := security.NewSecurityMonitor(orch, qClient)
 	if err != nil {
-		logger.Fatalf("FATAL: Failed to initialize security monitor: %v", err)
+		logger.Fatalf("FATAL: Security monitor failed: %v", err)
 	}
 	secMon.Run()
-	logger.Println("Security Monitor started.")
+	logger.Println("Security Monitor active.")
 
+	// 8. HTTP Сервер
 	httpServer := api.NewServer(agentPort, orch)
-	logger.Printf("API server configured on port %d.", agentPort)
-
 	go func() {
-		logger.Println("API server is starting to listen...")
+		logger.Printf("API listening on :%d", agentPort)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("FATAL: Could not start API server: %v", err)
+			logger.Fatalf("FATAL: HTTP Server crashed: %v", err)
 		}
 	}()
 
+	// 9. Сбор и отправка статистики (Фоновый процесс)
 	go func() {
 		statsCollector := stats.NewCollector()
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
+
 		for range ticker.C {
-			currentState := storage.GetState()
-			statsReq := types.StatsRequest{
-				CPUUtil: statsCollector.GetCPUUtil(),
-				RAMUtil: statsCollector.GetRAMUtil(),
-				GPUUtil: statsCollector.GetGPUUtil(),
-				MemUtil: statsCollector.GetGPUMemoryUtil(),
-				Status:  currentState.Status,
-			}
-			if err := qClient.SendStats(statsReq); err != nil {
-				logger.Printf("Warning: failed to send stats: %v", err)
-			} else {
-				logger.Println("Stats sent successfully.")
+			// Используем единый метод Collect(), который внутри дергает CGO для GPU
+			snapshot := statsCollector.Collect()
+			snapshot.Status = storage.GetState().Status
+
+			if err := qClient.SendStats(snapshot); err != nil {
+				logger.Printf("Stats send error: %v", err)
 			}
 		}
 	}()
 
+	// Готовность
 	daemon.SdNotify(false, daemon.SdNotifyReady)
-	logger.Println("Agent is ready and running.")
+	logger.Println(">>> AGENT IS READY AND RUNNING <<<")
 
+	// Ожидание выхода
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	logger.Println("Shutdown signal received. Shutting down gracefully...")
 
+	logger.Println("Shutdown signal received...")
 	daemon.SdNotify(false, daemon.SdNotifyStopping)
-
 	secMon.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	httpServer.Shutdown(ctx)
 
-	if err := httpServer.Shutdown(ctx); err != nil {
-		logger.Fatalf("FATAL: Server forced to shutdown: %v", err)
-	}
-
-	logger.Println("Agent shut down successfully.")
+	logger.Println("Goodbye.")
 }
 
+// getOutboundIP определяет внешний IP для регистрации
 func getOutboundIP() string {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {

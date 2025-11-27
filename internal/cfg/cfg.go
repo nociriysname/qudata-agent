@@ -1,23 +1,23 @@
-package config
+package cfg
 
 import (
-	"errors"
+	"fmt"
 	"os"
 )
 
 type Config struct {
 	APIKey string
+	Port   int
 }
 
 func LoadConfig() (*Config, error) {
 	apiKey := os.Getenv("QUDATA_API_KEY")
 	if apiKey == "" {
-		return nil, errors.New("QUDATA_API_KEY environment variable not set")
+		return nil, fmt.Errorf("QUDATA_API_KEY is required")
 	}
 
-	cfg := &Config{
+	return &Config{
 		APIKey: apiKey,
-	}
-
-	return cfg, nil
+		Port:   8080,
+	}, nil
 }
