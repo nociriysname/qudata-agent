@@ -31,6 +31,7 @@ type InitAgentRequest struct {
 	Address     string `json:"address"`
 	Fingerprint string `json:"fingerprint"`
 	PID         int    `json:"pid"`
+	Version     string `json:"version"`
 }
 
 type AgentResponse struct {
@@ -50,7 +51,7 @@ type CreateHostRequest struct {
 	GPUName       string                        `json:"gpu_name"`
 	GPUAmount     int                           `json:"gpu_amount"`
 	VRAM          float64                       `json:"vram"`
-	Location      *Location                     `json:"location,omitempty"`
+	Location      Location                      `json:"location,omitempty"`
 	MaxCUDA       float64                       `json:"max_cuda"`
 	Configuration attestation.ConfigurationData `json:"configuration"`
 }

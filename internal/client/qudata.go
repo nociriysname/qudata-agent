@@ -5,141 +5,70 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
-	"github.com/hashicorp/go-retryablehttp"
 	"github.com/nociriysname/qudata-agent/internal/storage"
 	"github.com/nociriysname/qudata-agent/pkg/types"
 )
 
 const (
-	basePath = "https://internal.qudata.ai/v0"
+	qudataAPIBaseURL = "https://internal.qudata.ai/v0"
+	requestTimeout   = 15 * time.Second
 )
 
-type Client struct {
-	apiKey    string
-	secretKey string
-	http      *retryablehttp.Client
+type QudataClient struct {
+	httpClient *http.Client
+	baseURL    string
+	apiKey     string
+	secretKey  string
 }
 
-func NewClient(apiKey string) (*Client, error) {
-	secret, _ := storage.LoadSecretKey()
-
-	client := retryablehttp.NewClient()
-	client.RetryMax = 3
-	client.RetryWaitMin = 1 * time.Second
-	client.RetryWaitMax = 5 * time.Second
-	client.Logger = nil
-
-	return &Client{
-		apiKey:    apiKey,
-		secretKey: secret,
-		http:      client,
-	}, nil
+type apiResponse struct {
+	Ok   bool                `json:"ok"`
+	Data types.AgentResponse `json:"data"`
 }
 
-func (c *Client) UpdateSecret(key string) {
-	c.secretKey = key
-}
-
-// InitAgent регистрирует агента
-func (c *Client) InitAgent(req types.InitAgentRequest) (*types.AgentResponse, error) {
-	resp, err := c.do("POST", "/init", req)
+func NewClient(apiKey string) (*QudataClient, error) {
+	secret, err := storage.LoadSecretKey()
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	type responseWrapper struct {
-		Ok   bool                 `json:"ok"`
-		Data *types.AgentResponse `json:"data"`
+		log.Printf("Info: starting without loaded secret key")
 	}
 
-	var wrapper responseWrapper
-	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
-		return nil, fmt.Errorf("decode error: %w", err)
+	client := &QudataClient{
+		httpClient: &http.Client{Timeout: requestTimeout},
+		baseURL:    qudataAPIBaseURL,
+		apiKey:     apiKey,
+		secretKey:  secret,
 	}
 
-	if !wrapper.Ok || wrapper.Data == nil {
-		return nil, fmt.Errorf("server returned ok=false")
+	if secret != "" {
+		client.apiKey = ""
 	}
 
-	return wrapper.Data, nil
+	return client, nil
 }
 
-// CreateHost отправляет данные аттестации
-func (c *Client) CreateHost(req types.CreateHostRequest) error {
-	resp, err := c.do("POST", "/init/host", req)
-	if err != nil {
-		return err
+func (c *QudataClient) UpdateSecret(key string) {
+	if key != "" {
+		c.secretKey = key
+		c.apiKey = ""
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("create host failed with status: %d", resp.StatusCode)
-	}
-	return nil
 }
 
-// SendStats отправляет метрики
-func (c *Client) SendStats(req types.StatsRequest) error {
-	// Запускаем в горутине, чтобы не блокировать основной поток (fire-and-forget)
-	go func() {
-		resp, err := c.do("POST", "/stats", req)
-		if err == nil {
-			resp.Body.Close()
-		}
-	}()
-	return nil
-}
-
-// NotifyInstanceReady сообщает, что SSH поднялся
-func (c *Client) NotifyInstanceReady(instanceID string) error {
-	path := fmt.Sprintf("/instances/%s/ready", instanceID)
-	resp, err := c.do("POST", path, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return nil
-}
-
-// ReportIncident - ИСПРАВЛЕННЫЙ МЕТОД
-// Сигнатура точно совпадает с интерфейсом incidentReporter в security
-func (c *Client) ReportIncident(incidentType string, reason string) error {
-	payload := map[string]interface{}{
-		"type":      incidentType,
-		"reason":    reason,
-		"timestamp": time.Now().Unix(),
-	}
-
-	// Используем синхронный вызов, так как это важно
-	resp, err := c.do("POST", "/incidents", payload)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("report incident failed: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-// Внутренний метод для запросов
-func (c *Client) do(method, path string, body interface{}) (*http.Response, error) {
+func (c *QudataClient) doRequest(method, path string, body any) (*http.Response, error) {
 	var buf io.Reader
 	if body != nil {
-		data, err := json.Marshal(body)
+		jsonData, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		buf = bytes.NewBuffer(data)
+		buf = bytes.NewBuffer(jsonData)
 	}
 
-	// Context Background используется внутри retryablehttp, если не передан явно
-	req, err := retryablehttp.NewRequest(method, basePath+path, buf)
+	url := fmt.Sprintf("%s%s", c.baseURL, path)
+	req, err := http.NewRequest(method, url, buf)
 	if err != nil {
 		return nil, err
 	}
@@ -148,9 +77,100 @@ func (c *Client) do(method, path string, body interface{}) (*http.Response, erro
 
 	if c.secretKey != "" {
 		req.Header.Set("X-Agent-Secret", c.secretKey)
-	} else {
-		req.Header.Set("X-API-Key", c.apiKey)
+	} else if c.apiKey != "" {
+		req.Header.Set("X-Api-Key", c.apiKey)
 	}
 
-	return c.http.Do(req)
+	return c.httpClient.Do(req)
+}
+
+func checkResponse(resp *http.Response) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body = io.NopCloser(bytes.NewBuffer(body))
+	return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(body))
+}
+
+func (c *QudataClient) InitAgent(req types.InitAgentRequest) (*types.AgentResponse, error) {
+	resp, err := c.doRequest("POST", "/init", req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send init request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("DEBUG RAW INIT RESPONSE: %s", string(bodyBytes))
+	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned non-200 status for init: %d", resp.StatusCode)
+	}
+
+	var wrapper apiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("failed to decode server response: %w", err)
+	}
+
+	if !wrapper.Ok {
+		return nil, fmt.Errorf("server returned ok=false")
+	}
+
+	return &wrapper.Data, nil
+}
+
+func (c *QudataClient) CreateHost(req types.CreateHostRequest) error {
+	resp, err := c.doRequest("POST", "/init/host", req)
+	if err != nil {
+		return fmt.Errorf("failed to send create host request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkResponse(resp); err != nil {
+		return fmt.Errorf("create host failed: %w", err)
+	}
+
+	return nil
+}
+
+func (c *QudataClient) ReportIncident(incidentType, reason string) error {
+	incidentPayload := struct {
+		IncidentType    string `json:"incident_type"`
+		Timestamp       int64  `json:"timestamp"`
+		InstancesKilled bool   `json:"instances_killed"`
+	}{
+		IncidentType:    incidentType,
+		Timestamp:       time.Now().Unix(),
+		InstancesKilled: true,
+	}
+
+	resp, err := c.doRequest("POST", "/incidents", incidentPayload)
+	if err != nil {
+		return fmt.Errorf("failed to send incident report: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return checkResponse(resp)
+}
+
+func (c *QudataClient) SendStats(req types.StatsRequest) error {
+	resp, err := c.doRequest("POST", "/stats", req)
+	if err != nil {
+		return fmt.Errorf("failed to send stats: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return checkResponse(resp)
+}
+
+func (c *QudataClient) NotifyInstanceReady(instanceID string) error {
+	path := fmt.Sprintf("/instances/%s/ready", instanceID)
+	resp, err := c.doRequest("POST", path, nil)
+	if err != nil {
+		return fmt.Errorf("failed to send ready notification: %w", err)
+	}
+	defer resp.Body.Close()
+
+	return checkResponse(resp)
 }

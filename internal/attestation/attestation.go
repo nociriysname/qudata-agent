@@ -2,6 +2,7 @@ package attestation
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"log"
@@ -10,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/nociriysname/qudata-agent/internal/utils"
+	_ "github.com/shirou/gopsutil/v3/host"
 )
 
 type UnitValue struct {
@@ -33,86 +37,114 @@ type ConfigurationData struct {
 type HostReport struct {
 	GPUName       string
 	GPUAmount     int
-	VRAM          float64 // GB
+	VRAM          float64
 	Fingerprint   string
-	DriverVersion string
-	CUDAVersion   float64
 	Configuration ConfigurationData
-	Devices       []GPUHardwareInfo
+	CUDAVersion   float64
+}
+
+type GPUInfo struct {
+	Name    string
+	VRAM_GB float64
 }
 
 func GenerateHostReport() *HostReport {
-	sysConfig := collectSystemConfig()
-
-	gpus, driverVer, err := GetHardwareData()
-	if err != nil {
-		log.Printf("WARN [Attestation]: Failed to get GPU data via NVML: %v", err)
-		return &HostReport{
-			Configuration: sysConfig,
-			Fingerprint:   generateFingerprint(sysConfig, nil),
-		}
-	}
+	gpus, cudaVersion, _ := GetGPUInfo()
 
 	var gpuName string
-	var totalVRAM uint64
+	var gpuAmount int
+	var vram float64
 	if len(gpus) > 0 {
 		gpuName = gpus[0].Name
-		totalVRAM = gpus[0].TotalMemory
+		gpuAmount = len(gpus)
+		vram = gpus[0].VRAM_GB
 	}
 
-	vramGB := float64(totalVRAM) / (1024 * 1024 * 1024)
-
-	cudaVer := 12.2
+	config := getConfiguration(cudaVersion)
 
 	return &HostReport{
 		GPUName:       gpuName,
-		GPUAmount:     len(gpus),
-		VRAM:          vramGB,
-		DriverVersion: driverVer,
-		CUDAVersion:   cudaVer,
-		Configuration: sysConfig,
-		Devices:       gpus,
-		Fingerprint:   generateFingerprint(sysConfig, gpus),
+		GPUAmount:     gpuAmount,
+		VRAM:          vram,
+		Fingerprint:   GetFingerprint(),
+		CUDAVersion:   cudaVersion,
+		Configuration: config,
 	}
 }
 
-func collectSystemConfig() ConfigurationData {
-	ram := getRAM()
-	cpuCores := runtime.NumCPU()
-	cpuFreq := getCPUFreq()
-
-	return ConfigurationData{
-		RAM:         ram,
-		Disk:        getDisk(),
-		CPUName:     getCPUName(),
-		CPUCores:    cpuCores,
-		CPUFreq:     cpuFreq,
-		MemorySpeed: 2400.0,
-		EthernetIn:  1.0,
-		EthernetOut: 1.0,
-		Capacity:    (float64(cpuCores) * cpuFreq * ram.Amount) / 100,
+func GetGPUInfo() (gpus []GPUInfo, cudaVersion float64, err error) {
+	_, err = utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi")
+	if err != nil {
+		return nil, 0, nil
 	}
+
+	countOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=count", "--format=csv,noheader")
+	count, _ := strconv.Atoi(strings.TrimSpace(countOutput))
+	if count == 0 {
+		return nil, 0, nil
+	}
+
+	for i := 0; i < count; i++ {
+		index := strconv.Itoa(i)
+		var gpu GPUInfo
+		nameOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=gpu_name", "--format=csv,noheader", "-i", index)
+		gpu.Name = strings.TrimSpace(nameOutput)
+		vramOutput, _ := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits", "-i", index)
+		vramMiB, _ := strconv.ParseFloat(strings.TrimSpace(vramOutput), 64)
+		gpu.VRAM_GB = vramMiB / 1024
+		gpus = append(gpus, gpu)
+	}
+
+	fullOutput, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi")
+	if err == nil {
+		lines := strings.Split(fullOutput, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "CUDA Version:") {
+				fields := strings.Fields(line)
+				if len(fields) >= 3 {
+					cudaVersion, _ = strconv.ParseFloat(fields[len(fields)-2], 64)
+					break
+				}
+			}
+		}
+	} else {
+		log.Printf("Warning: could not get CUDA version via nvidia-smi: %v", err)
+	}
+
+	return gpus, cudaVersion, nil
 }
 
-func generateFingerprint(conf ConfigurationData, gpus []GPUHardwareInfo) string {
+func GetFingerprint() string {
 	var parts []string
-
-	// Machine ID
 	if b, err := os.ReadFile("/etc/machine-id"); err == nil {
 		parts = append(parts, strings.TrimSpace(string(b)))
 	}
-
-	// CPU Info
-	parts = append(parts, conf.CPUName, strconv.Itoa(conf.CPUCores))
-
-	// GPU UUIDs (Самое надежное для fingerprint)
-	for _, gpu := range gpus {
-		parts = append(parts, gpu.UUID)
+	serial, err := utils.RunCommandGetOutput(context.Background(), "", "nvidia-smi", "--query-gpu=serial", "--format=csv,noheader", "-i", "0")
+	if err == nil && strings.TrimSpace(serial) != "[N/A]" {
+		parts = append(parts, strings.TrimSpace(serial))
 	}
-
-	raw := strings.Join(parts, "|")
-	sum := sha256.Sum256([]byte(raw))
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+func getConfiguration(cudaVersion float64) ConfigurationData {
+	ram := getRAM()
+	cpuCores := getCPUCores()
+	cpuFreq := getCPUFreq()
+	netSpeed := getNetworkSpeed()
+	config := ConfigurationData{
+		RAM:            ram,
+		Disk:           getDisk(),
+		CPUName:        getCPUName(),
+		CPUCores:       cpuCores,
+		CPUFreq:        cpuFreq,
+		MemorySpeed:    getMemorySpeed(),
+		EthernetIn:     netSpeed,
+		EthernetOut:    netSpeed,
+		MaxCUDAVersion: cudaVersion,
+	}
+	config.Capacity = (float64(cpuCores) * cpuFreq * ram.Amount) / 100
+	return config
 }
 
 func getRAM() UnitValue {
@@ -120,7 +152,7 @@ func getRAM() UnitValue {
 	if err != nil {
 		return UnitValue{Amount: 0, Unit: "gb"}
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -145,12 +177,14 @@ func getDisk() UnitValue {
 }
 
 func getCPUName() string {
-	data, err := os.ReadFile("/proc/cpuinfo")
+	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
-		return "Unknown"
+		return ""
 	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	defer func() { _ = file.Close() }()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
 		if strings.HasPrefix(line, "model name") {
 			parts := strings.Split(line, ":")
 			if len(parts) >= 2 {
@@ -158,17 +192,23 @@ func getCPUName() string {
 			}
 		}
 	}
-	return "Unknown"
+	return ""
+}
+
+func getCPUCores() int {
+	return runtime.NumCPU()
 }
 
 func getCPUFreq() float64 {
-	data, err := os.ReadFile("/proc/cpuinfo")
+	file, err := os.Open("/proc/cpuinfo")
 	if err != nil {
 		return 0.0
 	}
+	defer func() { _ = file.Close() }()
 	var maxFreq float64
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
 		if strings.HasPrefix(line, "cpu MHz") {
 			parts := strings.Split(line, ":")
 			if len(parts) >= 2 {
@@ -183,4 +223,40 @@ func getCPUFreq() float64 {
 		}
 	}
 	return maxFreq
+}
+
+func getMemorySpeed() float64 {
+	return 2400.0
+}
+
+func getNetworkSpeed() float64 {
+	entries, err := os.ReadDir("/sys/class/net")
+	if err != nil {
+		return 1.0
+	}
+	var maxSpeed float64
+	for _, entry := range entries {
+		ifaceName := entry.Name()
+		if ifaceName == "lo" || strings.HasPrefix(ifaceName, "docker") || strings.HasPrefix(ifaceName, "veth") {
+			continue
+		}
+		operstatePath := "/sys/class/net/" + ifaceName + "/operstate"
+		operstate, err := os.ReadFile(operstatePath)
+		if err != nil || strings.TrimSpace(string(operstate)) != "up" {
+			continue
+		}
+		speedPath := "/sys/class/net/" + ifaceName + "/speed"
+		data, err := os.ReadFile(speedPath)
+		if err != nil {
+			continue
+		}
+		speed, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
+		if err == nil && speed > maxSpeed {
+			maxSpeed = speed
+		}
+	}
+	if maxSpeed > 0 {
+		return maxSpeed / 1000
+	}
+	return 1.0
 }
